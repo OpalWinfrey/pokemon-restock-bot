@@ -297,9 +297,15 @@ export async function registerSlashCommands() {
     }
   ];
 
+  const guildId = process.env.DISCORD_GUILD_ID;
+  if (!guildId) {
+    log.warn("DISCORD_GUILD_ID not set — skipping slash command registration");
+    return;
+  }
+
   try {
     await axios.put(
-      `https://discord.com/api/v10/applications/${appId}/commands`,
+      `https://discord.com/api/v10/applications/${appId}/guilds/${guildId}/commands`,
       commands,
       { headers: { Authorization: `Bot ${token}`, "Content-Type": "application/json" } }
     );
