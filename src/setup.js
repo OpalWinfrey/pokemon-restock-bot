@@ -76,6 +76,11 @@ function buildHelpMessage() {
           inline: false
         },
         {
+          name: "🏪 See Monitored Stores",
+          value: "`/stores`\nLists every store the bot is currently checking, grouped by retailer.",
+          inline: false
+        },
+        {
           name: "📊 Bot Status",
           value: "`/status`\nShows how many products and stores are being monitored, and when the last check ran.",
           inline: false

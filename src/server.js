@@ -262,6 +262,39 @@ function handleProducts() {
   };
 }
 
+function handleStores() {
+  const storeMap = _botStats?.nearbyStores ?? {};
+  const DISPLAY_NAMES = {
+    target: "Target", walmart: "Walmart", costco: "Costco",
+    samsclub: "Sam's Club", meijer: "Meijer", walgreens: "Walgreens", cvs: "CVS"
+  };
+
+  const retailers = Object.entries(storeMap).filter(([, s]) => s.length > 0);
+  if (!retailers.length) {
+    return {
+      content: "No stores loaded yet. Run `/setlocation <zip>` to find stores near you.",
+      flags: 64
+    };
+  }
+
+  const lines = [];
+  for (const [retailerKey, stores] of retailers) {
+    const label = DISPLAY_NAMES[retailerKey] ?? retailerKey;
+    lines.push(`**${label}** (${stores.length})`);
+    for (const s of stores) {
+      lines.push(`  • ${s.name}${s.address ? ` — ${s.address}` : ""}`);
+    }
+  }
+
+  const total = retailers.reduce((n, [, s]) => n + s.length, 0);
+  const content = `**${total} store(s) currently being monitored:**\n\n${lines.join("\n")}`;
+
+  if (content.length > 1950) {
+    return { content: content.slice(0, 1947) + "...", flags: 64 };
+  }
+  return { content, flags: 64 };
+}
+
 async function handleDiscover() {
   // Fire off discovery in background and respond immediately
   discoverProducts()
@@ -398,6 +431,10 @@ export async function registerSlashCommands() {
       ]
     },
     {
+      name: "stores",
+      description: "Show all stores currently being monitored and their locations"
+    },
+    {
       name: "discover",
       description: "Manually trigger a product discovery scan right now"
     },
@@ -419,7 +456,7 @@ export async function registerSlashCommands() {
       commands,
       { headers: { Authorization: `Bot ${token}`, "Content-Type": "application/json" } }
     );
-    log.info("Slash commands registered: /setup /setlocation /status /products /discover /test");
+    log.info("Slash commands registered: /setup /setlocation /status /products /stores /discover /test");
   } catch (err) {
     log.error("Failed to register slash commands:", err.response?.data ?? err.message);
   }
@@ -476,6 +513,7 @@ export function startServer(botStats, initialConfig, rebuildStoreMap) {
           case "status":      responseData = handleStatus(botStats); break;
           case "test":        responseData = await handleTest(_discordConfig); break;
           case "products":    responseData = handleProducts(); break;
+          case "stores":      responseData = handleStores(); break;
           case "addproduct":  responseData = handleAddProduct(options); break;
           case "discover":    responseData = await handleDiscover(); break;
           default:            responseData = { content: "Unknown command.", flags: 64 };
