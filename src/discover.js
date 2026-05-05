@@ -3,7 +3,7 @@ import { readFileSync, writeFileSync } from "fs";
 import { fileURLToPath } from "url";
 import { dirname, join } from "path";
 import { log } from "./logger.js";
-import { browserHeaders, apiHeaders, sleepJitter } from "./http.js";
+import { browserHeaders, sleepJitter } from "./http.js";
 import { getReferenceMsrp, isLikelyOutOfPrint } from "./classify.js";
 import { sendOutOfPrintUpdate } from "./discord.js";
 
@@ -49,20 +49,22 @@ function isPokemonCard(name) {
 // --- Per-retailer search (runs all SEARCH_TERMS and deduplicates) ---
 
 async function searchTarget(term) {
-  const { data } = await axios.get(
-    "https://redsky.target.com/redsky_aggregations/v1/web/plp_search_v2",
-    {
-      params: {
-        keyword: term, count: 24, offset: 0, channel: "WEB",
-        visitor_id: "anonymous", pricing_store_id: "3991",
-        page: "/s/pokemon",
-        key: "9f36aeafbe60771e321a7cc95a78140772ab3e96"
-      },
-      headers: apiHeaders({ Referer: "https://www.target.com/", Origin: "https://www.target.com" }),
-      timeout: 15000
-    }
-  );
-  return (data?.data?.search?.products ?? []).map(p => {
+  const { data: html } = await axios.get("https://www.target.com/s", {
+    params: { searchTerm: term },
+    headers: browserHeaders({ Referer: "https://www.target.com/" }),
+    timeout: 15000
+  });
+
+  const match = html.match(/<script id="__NEXT_DATA__" type="application\/json">([\s\S]*?)<\/script>/);
+  if (!match) return [];
+
+  const pageData = JSON.parse(match[1]);
+  const products =
+    pageData?.props?.pageProps?.pageData?.searchResponse?.data?.search?.products ??
+    pageData?.props?.pageProps?.initialData?.searchResponse?.data?.search?.products ??
+    [];
+
+  return products.map(p => {
     const tcin = p.tcin;
     const images = p.item?.enrichment?.images;
     return {
