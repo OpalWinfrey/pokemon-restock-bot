@@ -90,7 +90,8 @@ function buildHelpMessage() {
           value: [
             "🔥 **#hot-restocks** — ETBs, booster boxes, premium collections",
             "📋 **#all-restocks** — everything else",
-            "🎛️ **#pick-your-alerts** — choose what you want to be pinged for"
+            "🎛️ **#pick-your-alerts** — choose what you want to be pinged for",
+            "📛 **#out-of-print** — sets the bot detected as no longer in production"
           ].join("\n"),
           inline: false
         }
@@ -127,6 +128,27 @@ export async function runSetup(guildId) {
 
   // Post help message in #bot-commands
   await discord.sendMessage(channels.help, buildHelpMessage());
+
+  // Post explanation in #out-of-print
+  await discord.sendMessage(channels.outOfPrint, {
+    embeds: [{
+      title: "📛 Out-of-Print Products",
+      color: 0x95a5a6,
+      description: [
+        "This channel lists Pokemon products the bot detected as **no longer in active production**.",
+        "",
+        "**How it works:**",
+        "When the bot finds a product selling for more than **2× its MSRP** at every retailer, it flags it as likely out of print. These products are still tracked in case they restock at normal price — but you won't get pinged for reseller-priced stock.",
+        "",
+        "**Examples:**",
+        "• Pokémon 151 ETB was $49.99 MSRP — if it only shows at $300+ it's flagged here",
+        "• Silver Tempest ETBs at $89+ = likely reseller only",
+        "",
+        "**Note:** Products found on the official Pokemon Center store are always treated as in-print regardless of price elsewhere."
+      ].join("\n"),
+      footer: { text: "This list updates automatically every 12 hours during product discovery." }
+    }]
+  });
 
   log.info("Setup complete");
   return { channels, roles };

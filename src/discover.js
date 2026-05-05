@@ -4,6 +4,8 @@ import { fileURLToPath } from "url";
 import { dirname, join } from "path";
 import { log } from "./logger.js";
 import { browserHeaders, apiHeaders, sleepJitter } from "./http.js";
+import { getReferenceMsrp, isLikelyOutOfPrint } from "./classify.js";
+import { sendOutOfPrintUpdate } from "./discord.js";
 
 const __dir = dirname(fileURLToPath(import.meta.url));
 const PRODUCTS_FILE = join(__dir, "../config/products.json");
@@ -112,8 +114,30 @@ async function searchSamsClub(term) {
   })).filter(p => p.name && p.cfg.itemId && isPokemonCard(p.name));
 }
 
-const SEARCH_RETAILERS = ["target", "walmart"];
-const SEARCH_FNS = [searchTarget, searchWalmart];
+// Pokemon Center — official TPCi store. Products here = currently in print at real MSRP.
+// We use their catalog to validate prices and flag out-of-print items discovered elsewhere.
+async function searchPokemonCenter(term) {
+  try {
+    const { data } = await axios.get("https://www.pokemoncenter.com/api/2.0/page/catalog", {
+      params: { q: term, start: 0, sz: 24, format: "page-types" },
+      headers: browserHeaders({ Referer: "https://www.pokemoncenter.com/", Origin: "https://www.pokemoncenter.com" }),
+      timeout: 15000
+    });
+    const hits = data?.hits ?? data?.results ?? [];
+    return hits.map(p => ({
+      name: p.name ?? p.product_name ?? "",
+      imageUrl: p.image?.src ?? p.thumbnail ?? null,
+      price: p.price?.sales?.value ?? p.price?.regular?.value ?? null,
+      retailer: "pokemoncenter",
+      cfg: { itemId: String(p.id ?? p.productId ?? ""), url: `https://www.pokemoncenter.com${p.url ?? ""}` }
+    })).filter(p => p.name && p.cfg.itemId && isPokemonCard(p.name));
+  } catch {
+    return []; // Pokemon Center blocks or times out — silent fallback
+  }
+}
+
+const SEARCH_RETAILERS = ["target", "walmart", "pokemoncenter"];
+const SEARCH_FNS = [searchTarget, searchWalmart, searchPokemonCenter];
 
 // Run one search term against all retailers sequentially with jitter to avoid blocks
 async function runTerm(term) {
@@ -147,6 +171,7 @@ function inferMsrp(existingMsrp, prices) {
 
 function mergeIntoProducts(existing, discovered) {
   let added = 0;
+  const flagChanges = []; // { product, wasOutOfPrint }
 
   // Deduplicate within discovered first
   const deduped = [];
@@ -155,24 +180,63 @@ function mergeIntoProducts(existing, discovered) {
     if (!dup) deduped.push(item);
   }
 
+  // Track which products saw an in-print signal this cycle
+  const inPrintSignals = new Set();
+
   for (const item of deduped) {
     let product = existing.find(p => isSameProduct(p.name, item.name));
+    const wasOutOfPrint = product?.outOfPrint ?? false;
 
     if (!product) {
-      product = { name: item.name, imageUrl: null, msrp: null, retailers: {} };
+      product = { name: item.name, imageUrl: null, msrp: null, outOfPrint: false, retailers: {} };
       existing.push(product);
       added++;
     }
 
     if (!product.imageUrl && item.imageUrl) product.imageUrl = item.imageUrl;
-    product.msrp = inferMsrp(product.msrp, [item.price]);
+
+    // Use reference MSRP by category as authoritative source.
+    // Only fall back to lowest-seen price if no reference exists (e.g. singles).
+    const refMsrp = getReferenceMsrp(item.name);
+    if (refMsrp != null) {
+      product.msrp = refMsrp;
+    } else {
+      product.msrp = inferMsrp(product.msrp, [item.price]);
+    }
+
+    // Pokemon Center listing = confirmed in-print — clear any out-of-print flag
+    if (item.retailer === "pokemoncenter") {
+      inPrintSignals.add(product.name);
+      product.outOfPrint = false;
+      if (item.price && !refMsrp) product.msrp = item.price; // use PC price as MSRP only if no category reference
+    } else if (item.price && !isLikelyOutOfPrint(item.name, item.price)) {
+      inPrintSignals.add(product.name); // retail price looks normal → in-print signal
+    }
 
     if (!product.retailers[item.retailer]) {
       product.retailers[item.retailer] = item.cfg;
     }
+
+    if (product.outOfPrint !== wasOutOfPrint) {
+      flagChanges.push({ product, wasOutOfPrint });
+    }
   }
 
-  return added;
+  // Second pass: products with no in-print signal and all prices look inflated → flag out-of-print
+  for (const item of deduped) {
+    const product = existing.find(p => isSameProduct(p.name, item.name));
+    if (!product || inPrintSignals.has(product.name)) continue;
+    const wasOutOfPrint = product.outOfPrint;
+    if (item.price && isLikelyOutOfPrint(item.name, item.price) && !product.outOfPrint) {
+      product.outOfPrint = true;
+      log.info(`  📛 Flagging as out-of-print: "${product.name}" — $${item.price} (>2× MSRP)`);
+      if (!flagChanges.find(f => f.product === product)) {
+        flagChanges.push({ product, wasOutOfPrint });
+      }
+    }
+  }
+
+  return { added, flagChanges };
 }
 
 async function trySearch(retailer, fn) {
@@ -186,7 +250,7 @@ async function trySearch(retailer, fn) {
   }
 }
 
-export async function discoverProducts() {
+export async function discoverProducts(discordConfig = null) {
   log.info("\n🧭 Auto-discovering Pokemon products...");
 
   // Run search terms sequentially with delays to avoid rate limiting
@@ -206,7 +270,7 @@ export async function discoverProducts() {
     log.warn("products.json unreadable — starting fresh");
   }
 
-  const added = mergeIntoProducts(existing, allResults);
+  const { added, flagChanges } = mergeIntoProducts(existing, allResults);
 
   try {
     writeFileSync(PRODUCTS_FILE, JSON.stringify(existing, null, 2) + "\n");
@@ -215,6 +279,14 @@ export async function discoverProducts() {
   }
 
   log.info(`  ✅ Discovery complete — ${added} new product(s) added, ${existing.length} total tracked`);
+  if (flagChanges.length) {
+    log.info(`  📛 ${flagChanges.length} out-of-print flag change(s)`);
+    if (discordConfig) {
+      for (const { product, wasOutOfPrint } of flagChanges) {
+        await sendOutOfPrintUpdate(discordConfig, product, wasOutOfPrint).catch(() => {});
+      }
+    }
+  }
 
   return existing;
 }

@@ -9,13 +9,14 @@ import { loadDiscordConfig } from "./discord-config.js";
 import { getStoresNearZip } from "./stores.js";
 import { discoverProducts } from "./discover.js";
 import { getUsers } from "./users.js";
-import { checkTarget }    from "./checkers/target.js";
-import { checkWalmart }   from "./checkers/walmart.js";
-import { checkCostco }    from "./checkers/costco.js";
-import { checkSamsClub }  from "./checkers/samsclub.js";
-import { checkMeijer }    from "./checkers/meijer.js";
-import { checkWalgreens } from "./checkers/walgreens.js";
-import { checkCVS }       from "./checkers/cvs.js";
+import { checkTarget }         from "./checkers/target.js";
+import { checkWalmart }        from "./checkers/walmart.js";
+import { checkCostco }         from "./checkers/costco.js";
+import { checkSamsClub }       from "./checkers/samsclub.js";
+import { checkMeijer }         from "./checkers/meijer.js";
+import { checkWalgreens }      from "./checkers/walgreens.js";
+import { checkCVS }            from "./checkers/cvs.js";
+import { checkPokemonCenter }  from "./checkers/pokemoncenter.js";
 import { sendRestockAlert, sendToLogs } from "./discord.js";
 import { startServer, registerSlashCommands, getDiscordConfig } from "./server.js";
 import { sleepJitter } from "./http.js";
@@ -50,7 +51,13 @@ const CHECKERS = {
 const DISPLAY = {
   target: "Target", walmart: "Walmart", costco: "Costco",
   samsclub: "Sam's Club", meijer: "Meijer",
-  walgreens: "Walgreens", cvs: "CVS"
+  walgreens: "Walgreens", cvs: "CVS",
+  pokemoncenter: "Pokemon Center"
+};
+
+// Retailers that are online-only — checked once per product, not once per store
+const ONLINE_ONLY_CHECKERS = {
+  pokemoncenter: (cfg) => checkPokemonCenter({ itemId: cfg.itemId, url: cfg.url })
 };
 
 async function buildStoreMap() {
@@ -72,16 +79,45 @@ async function checkAll(storeMap, discordConfig) {
   let restocksFound = 0;
 
   for (const product of products) {
+    if (product.outOfPrint) { log.debug(`Skipping out-of-print: ${product.name}`); continue; }
     const { name, retailers, imageUrl = null, msrp = null } = product;
 
     for (const [retailerKey, cfg] of Object.entries(retailers)) {
+      const displayName = DISPLAY[retailerKey] ?? retailerKey;
+
+      // Online-only retailers (Pokemon Center) — check once per product, no store loop
+      if (ONLINE_ONLY_CHECKERS[retailerKey]) {
+        try {
+          const { inStock, price } = await ONLINE_ONLY_CHECKERS[retailerKey](cfg);
+          const key = stateKey(name, retailerKey, "online");
+          if (inStock) {
+            stockCounts[key] = (stockCounts[key] ?? 0) + 1;
+            if (stockCounts[key] === 2) {
+              log.info(`ONLINE DROP confirmed: ${name} at ${displayName}`);
+              restocksFound++;
+              await sendRestockAlert({
+                productName: name, retailer: displayName, retailerKey,
+                storeName: "Pokemon Center Online", storeAddress: "pokemoncenter.com", storeId: "online",
+                url: cfg.url, price, imageUrl, msrp, discordConfig
+              });
+            } else {
+              log.debug(`Online in stock (${stockCounts[key]}/2): ${name} at ${displayName}`);
+            }
+          } else {
+            stockCounts[key] = 0;
+          }
+        } catch (err) {
+          log.error(`Online check failed: ${name} at ${displayName}:`, err.message);
+        }
+        await sleepJitter(1000, 500);
+        continue;
+      }
+
       const stores = storeMap[retailerKey] ?? [];
       if (!stores.length) continue;
 
       const checker = CHECKERS[retailerKey];
       if (!checker) { log.warn(`No checker for "${retailerKey}" — skipping`); continue; }
-
-      const displayName = DISPLAY[retailerKey] ?? retailerKey;
 
       for (const store of stores) {
         try {
@@ -150,7 +186,7 @@ function storeBreakdown(storeMap) {
   // Delay first discovery 5 min so the server is stable before firing search requests
   log.info("⏳ First product discovery delayed 5 min to avoid startup blocking...");
   await new Promise(r => setTimeout(r, 5 * 60 * 1000));
-  await discoverProducts();
+  await discoverProducts(getDiscordConfig());
 
   const storeMap = await buildStoreMap();
   botStats.nearbyStores = storeMap;
@@ -184,7 +220,7 @@ function storeBreakdown(storeMap) {
   );
   setInterval(async () => {
     try {
-      await discoverProducts();
+      await discoverProducts(getDiscordConfig());
     } catch (err) {
       log.error("discoverProducts error:", err.message);
       await sendToLogs(getDiscordConfig(), `❌ Discovery error: ${err.message}`);

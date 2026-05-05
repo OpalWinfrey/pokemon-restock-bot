@@ -9,11 +9,12 @@ import { log } from "./logger.js";
 
 // These are the exact names the bot creates and looks for
 export const CHANNEL_NAMES = {
-  hot:  "hot-restocks",
-  all:  "all-restocks",
-  logs: "bot-logs",
-  pick: "pick-your-alerts",
-  help: "bot-commands"
+  hot:        "hot-restocks",
+  all:        "all-restocks",
+  logs:       "bot-logs",
+  pick:       "pick-your-alerts",
+  help:       "bot-commands",
+  outOfPrint: "out-of-print"
 };
 
 export const ROLE_NAMES = {
