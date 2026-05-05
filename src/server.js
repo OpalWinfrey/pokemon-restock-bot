@@ -71,7 +71,7 @@ async function handleSetup(guildId) {
   }
 }
 
-function handleSetLocation(userId, username, options) {
+function handleSetLocation(userId, username, options, interactionToken) {
   const zip = options.find(o => o.name === "zip")?.value;
   const radius = 25;
 
@@ -81,17 +81,39 @@ function handleSetLocation(userId, username, options) {
 
   setUserLocation(userId, username, zip, radius);
 
-  // Kick off store map rebuild in background so new zip gets added immediately
+  // Rebuild store map and follow up with exact counts once done
   if (_rebuildStoreMap) {
-    _rebuildStoreMap().then(storeMap => {
+    _rebuildStoreMap().then(async storeMap => {
       if (_botStats) _botStats.nearbyStores = storeMap;
-      const count = Object.values(storeMap).flat().length;
-      log.info(`Store map rebuilt after /setlocation by ${username}: ${count} total store(s)`);
+
+      const DISPLAY_NAMES = {
+        target: "Target", walmart: "Walmart", costco: "Costco",
+        samsclub: "Sam's Club", meijer: "Meijer", walgreens: "Walgreens", cvs: "CVS"
+      };
+      const found = Object.entries(storeMap)
+        .filter(([, s]) => s.length > 0)
+        .map(([r, s]) => `• **${DISPLAY_NAMES[r] ?? r}**: ${s.length} store(s)`);
+      const total = Object.values(storeMap).flat().length;
+
+      const followUp = total > 0
+        ? `📍 Found **${total} store(s)** within ${radius} miles of \`${zip}\`:\n${found.join("\n")}`
+        : `⚠️ No stores found within ${radius} miles of \`${zip}\`. The bot may still detect online-only drops.\n\nIf you're in a rural area, try a nearby larger city's zip.`;
+
+      log.info(`Store map rebuilt for ${username} (${zip}): ${total} store(s)`);
+
+      // Send follow-up via interaction webhook (valid for 15 min, no bot token needed)
+      const appId = process.env.DISCORD_APP_ID;
+      if (appId && interactionToken) {
+        await axios.post(
+          `https://discord.com/api/v10/webhooks/${appId}/${interactionToken}`,
+          { content: followUp, flags: 64 }
+        ).catch(err => log.warn("setlocation follow-up failed:", err.message));
+      }
     }).catch(err => log.warn("Store map rebuild failed:", err.message));
   }
 
   return {
-    content: `✅ Got it! You'll get alerts for stores within **25 miles of ${zip}**.\n\nIf you haven't already, head to <#pick-your-alerts> and click the buttons for what you want to be notified about.`,
+    content: `✅ Got it! Searching for stores within **${radius} miles of ${zip}**...`,
     flags: 64
   };
 }
@@ -450,7 +472,7 @@ export function startServer(botStats, initialConfig, rebuildStoreMap) {
         const { name, options = [] } = body.data;
         switch (name) {
           case "setup":       responseData = await handleSetup(guildId); break;
-          case "setlocation": responseData = handleSetLocation(userId, username, options); break;
+          case "setlocation": responseData = handleSetLocation(userId, username, options, body.token); break;
           case "status":      responseData = handleStatus(botStats); break;
           case "test":        responseData = await handleTest(_discordConfig); break;
           case "products":    responseData = handleProducts(); break;
