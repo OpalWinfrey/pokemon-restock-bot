@@ -81,9 +81,16 @@ async function searchWalmart(term) {
     headers: browserHeaders({ Referer: "https://www.walmart.com/" }), timeout: 15000
   });
   const match = html.match(/<script id="__NEXT_DATA__" type="application\/json">([\s\S]*?)<\/script>/);
-  if (!match) return [];
-  const items =
-    JSON.parse(match[1])?.props?.pageProps?.initialData?.searchResult?.itemStacks?.[0]?.items ?? [];
+  if (!match) {
+    log.warn(`  walmart: no __NEXT_DATA__ in search page for "${term}" — possible bot block`);
+    return [];
+  }
+  const pageData = JSON.parse(match[1]);
+  const stacks = pageData?.props?.pageProps?.initialData?.searchResult?.itemStacks ?? [];
+  const items = stacks.flatMap(s => s.items ?? []);
+  if (items.length === 0) {
+    log.debug(`  walmart: __NEXT_DATA__ found but 0 items in itemStacks for "${term}"`);
+  }
   return items.filter(item => item.usItemId).map(item => ({
     name: item.name ?? "",
     imageUrl: item.imageInfo?.thumbnailUrl ?? null,
@@ -131,8 +138,9 @@ async function searchPokemonCenter(term) {
       retailer: "pokemoncenter",
       cfg: { itemId: String(p.id ?? p.productId ?? ""), url: `https://www.pokemoncenter.com${p.url ?? ""}` }
     })).filter(p => p.name && p.cfg.itemId && isPokemonCard(p.name));
-  } catch {
-    return []; // Pokemon Center blocks or times out — silent fallback
+  } catch (err) {
+    log.warn(`  pokemoncenter: search failed — ${err.response?.status ?? err.message}`);
+    return [];
   }
 }
 
