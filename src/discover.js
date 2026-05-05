@@ -144,8 +144,10 @@ async function searchPokemonCenter(term) {
   }
 }
 
-const SEARCH_RETAILERS = ["target", "walmart", "pokemoncenter"];
-const SEARCH_FNS = [searchTarget, searchWalmart, searchPokemonCenter];
+// Walmart search page is blocked from Railway datacenter IPs (__NEXT_DATA__ not served).
+// Product-level checks still run via ONLINE_ONLY_CHECKERS for items already discovered.
+const SEARCH_RETAILERS = ["target", "pokemoncenter"];
+const SEARCH_FNS = [searchTarget, searchPokemonCenter];
 
 // Run one search term against all retailers sequentially with jitter to avoid blocks
 async function runTerm(term) {
