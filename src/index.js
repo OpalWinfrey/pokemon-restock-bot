@@ -1,99 +1,91 @@
 import "dotenv/config";
 import cron from "node-cron";
 import { products } from "../config/products.js";
+import { getStoresNearZip } from "./stores.js";
 import { checkTarget } from "./checkers/target.js";
 import { checkWalmart } from "./checkers/walmart.js";
 import { checkBestBuy } from "./checkers/bestbuy.js";
 import { checkCostco } from "./checkers/costco.js";
+import { checkWalgreens } from "./checkers/walgreens.js";
+import { checkCVS } from "./checkers/cvs.js";
 import { sendRestockAlert } from "./discord.js";
 
-// In-memory state to track what was previously in stock
-// Prevents spamming alerts for the same restock
-const previousState = {};
-
-const TARGET_STORE_ID = process.env.TARGET_STORE_ID;
-const WALMART_STORE_ID = process.env.WALMART_STORE_ID;
-const BESTBUY_STORE_ID = process.env.BESTBUY_STORE_ID;
-const COSTCO_WAREHOUSE_ID = process.env.COSTCO_WAREHOUSE_ID;
+const USER_ZIP = process.env.USER_ZIP;
+const SEARCH_RADIUS_MILES = parseInt(process.env.SEARCH_RADIUS_MILES || "20");
 const POLL_INTERVAL = parseInt(process.env.POLL_INTERVAL_SECONDS || "60");
 
-function stateKey(productName, retailer) {
-  return `${productName}__${retailer}`;
+// State key per product + retailer + store so we alert once per location per restock event
+const previousState = {};
+function stateKey(productName, retailer, storeId) {
+  return `${productName}__${retailer}__${storeId}`;
 }
 
-async function checkRetailer({ name, retailer, check, storeId, url }) {
-  const { inStock, price } = await check();
-  const key = stateKey(name, retailer);
-  const wasInStock = previousState[key] ?? false;
+const CHECKERS = {
+  target:    (cfg, storeId) => checkTarget({ tcin: cfg.tcin, storeId }),
+  walmart:   (cfg, storeId) => checkWalmart({ itemId: cfg.itemId, storeId }),
+  bestbuy:   (cfg, storeId) => checkBestBuy({ sku: cfg.sku, storeId }),
+  costco:    (cfg, storeId) => checkCostco({ itemNumber: cfg.itemNumber, warehouseId: storeId }),
+  walgreens: (cfg, storeId) => checkWalgreens({ sku: cfg.sku, storeNum: storeId }),
+  cvs:       (cfg, storeId) => checkCVS({ upc: cfg.upc, storeId })
+};
 
-  if (inStock && !wasInStock) {
-    console.log(`✅ RESTOCK: ${name} at ${retailer}!`);
-    await sendRestockAlert({ productName: name, retailer, storeId, url, price });
-  } else if (!inStock) {
-    console.log(`❌ Out of stock: ${name} at ${retailer}`);
-  } else {
-    console.log(`✅ Still in stock: ${name} at ${retailer} (no new alert sent)`);
-  }
+const DISPLAY_NAMES = {
+  target: "Target", walmart: "Walmart", bestbuy: "Best Buy",
+  costco: "Costco", walgreens: "Walgreens", cvs: "CVS"
+};
 
-  previousState[key] = inStock;
-}
-
-async function checkAll() {
+async function checkAll(nearbyStores) {
   console.log(`\n🔍 Checking stock... [${new Date().toLocaleTimeString()}]`);
 
   for (const product of products) {
     const { name, retailers } = product;
 
-    if (retailers.target && TARGET_STORE_ID) {
-      await checkRetailer({
-        name,
-        retailer: "Target",
-        check: () => checkTarget({ tcin: retailers.target.tcin, storeId: TARGET_STORE_ID }),
-        storeId: TARGET_STORE_ID,
-        url: retailers.target.url
-      });
-    }
+    for (const [retailerKey, cfg] of Object.entries(retailers)) {
+      const stores = nearbyStores[retailerKey] ?? [];
+      if (stores.length === 0) continue;
 
-    if (retailers.walmart && WALMART_STORE_ID) {
-      await checkRetailer({
-        name,
-        retailer: "Walmart",
-        check: () => checkWalmart({ itemId: retailers.walmart.itemId, storeId: WALMART_STORE_ID }),
-        storeId: WALMART_STORE_ID,
-        url: retailers.walmart.url
-      });
-    }
+      const checker = CHECKERS[retailerKey];
+      const displayName = DISPLAY_NAMES[retailerKey] ?? retailerKey;
 
-    if (retailers.bestbuy && BESTBUY_STORE_ID) {
-      await checkRetailer({
-        name,
-        retailer: "Best Buy",
-        check: () => checkBestBuy({ sku: retailers.bestbuy.sku, storeId: BESTBUY_STORE_ID }),
-        storeId: BESTBUY_STORE_ID,
-        url: retailers.bestbuy.url
-      });
-    }
+      for (const store of stores) {
+        const { inStock, price } = await checker(cfg, store.id);
+        const key = stateKey(name, retailerKey, store.id);
+        const wasInStock = previousState[key] ?? false;
 
-    if (retailers.costco && COSTCO_WAREHOUSE_ID) {
-      await checkRetailer({
-        name,
-        retailer: "Costco",
-        check: () => checkCostco({ itemNumber: retailers.costco.itemNumber, warehouseId: COSTCO_WAREHOUSE_ID }),
-        storeId: COSTCO_WAREHOUSE_ID,
-        url: retailers.costco.url
-      });
+        if (inStock && !wasInStock) {
+          console.log(`✅ RESTOCK: ${name} at ${displayName} — ${store.name}!`);
+          await sendRestockAlert({
+            productName: name,
+            retailer: displayName,
+            storeName: store.name,
+            storeId: store.id,
+            url: cfg.url,
+            price
+          });
+        } else if (!inStock) {
+          console.log(`❌ Out of stock: ${name} at ${displayName} — ${store.name}`);
+        } else {
+          console.log(`✅ Still in stock: ${name} at ${displayName} — ${store.name} (no alert)`);
+        }
+
+        previousState[key] = inStock;
+      }
     }
   }
 }
 
+if (!USER_ZIP) {
+  console.error("❌ USER_ZIP is not set in .env — the bot cannot find nearby stores without it.");
+  process.exit(1);
+}
+
 console.log("🚀 Pokemon Restock Bot starting...");
 console.log(`📦 Tracking ${products.length} product(s)`);
+console.log(`📍 ZIP: ${USER_ZIP}  |  Radius: ${SEARCH_RADIUS_MILES} miles`);
 console.log(`⏱  Polling every ${POLL_INTERVAL} seconds`);
-console.log(`🎯 Target Store ID: ${TARGET_STORE_ID || "NOT SET"}`);
-console.log(`🛒 Walmart Store ID: ${WALMART_STORE_ID || "NOT SET"}`);
-console.log(`💙 Best Buy Store ID: ${BESTBUY_STORE_ID || "NOT SET"}`);
-console.log(`🏪 Costco Warehouse ID: ${COSTCO_WAREHOUSE_ID || "NOT SET"}`);
 
-await checkAll();
+const nearbyStores = await getStoresNearZip(USER_ZIP, SEARCH_RADIUS_MILES);
 
-cron.schedule(`*/${POLL_INTERVAL} * * * * *`, checkAll);
+await checkAll(nearbyStores);
+
+cron.schedule(`*/${POLL_INTERVAL} * * * * *`, () => checkAll(nearbyStores));

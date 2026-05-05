@@ -1,10 +1,12 @@
-// Add the products you want to track here
+// Add the products you want to track here.
 //
 // IDs by retailer:
-//   target.tcin    — in the URL: target.com/p/.../-/A-XXXXXXXX
-//   walmart.itemId — in the URL: walmart.com/ip/name/XXXXXXXXXX
-//   bestbuy.sku    — in the URL: bestbuy.com/site/name/XXXXXXXXX.p?skuId=XXXXXXXXX
-//   costco.itemNumber — 7-digit number in URL: costco.com/product-name.product.XXXXXXX.html
+//   target.tcin       — URL: target.com/p/.../-/A-XXXXXXXX
+//   walmart.itemId    — URL: walmart.com/ip/name/XXXXXXXXXX
+//   bestbuy.sku       — URL: bestbuy.com/site/name/XXXXXXXXX.p?skuId=XXXXXXXXX
+//   costco.itemNumber — 7-digit number in URL: costco.com/name.product.XXXXXXX.html
+//   walgreens.sku     — found on the product page URL or barcode lookup
+//   cvs.upc           — UPC barcode on the product packaging
 
 export const products = [
   {
@@ -34,6 +36,14 @@ export const products = [
       target: {
         tcin: "12345678",
         url: "https://www.target.com/p/-/A-12345678"
+      },
+      walgreens: {
+        sku: "987654",
+        url: "https://www.walgreens.com/store/c/pokemon/ID=prod987654-product"
+      },
+      cvs: {
+        upc: "0820650850527",
+        url: "https://www.cvs.com/shop/pokemon-booster-bundle"
       }
     }
   }
