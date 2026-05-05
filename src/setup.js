@@ -28,10 +28,7 @@ function buildPickerMessage(roleIds) {
       "## 🎴 Pokemon Restock Alerts",
       "Tap what you want to be pinged for. Tap again to turn it off.",
       "",
-      "**Product Types** — pick as many as you want",
       "> ETB = Elite Trainer Box · Premium = special & ultra collections",
-      "",
-      "**Stores** — all on by default, tap to mute one",
     ].join("\n"),
     components: [
       {
@@ -51,23 +48,6 @@ function buildPickerMessage(roleIds) {
           { type: 2, style: 2, label: "🃏 Singles & Packs", custom_id: "role_singles"    },
           { type: 2, style: 4, label: "🔕 Remove All",      custom_id: "role_removeAll"  }
         ]
-      },
-      {
-        type: 1,
-        components: [
-          { type: 2, style: 2, label: "🎯 Target",       custom_id: "retailer_target"    },
-          { type: 2, style: 2, label: "🛒 Walmart",      custom_id: "retailer_walmart"   },
-          { type: 2, style: 2, label: "🏪 Costco",       custom_id: "retailer_costco"    },
-          { type: 2, style: 2, label: "👥 Sam's Club",   custom_id: "retailer_samsclub"  },
-          { type: 2, style: 2, label: "🍎 Meijer",       custom_id: "retailer_meijer"    }
-        ]
-      },
-      {
-        type: 1,
-        components: [
-          { type: 2, style: 2, label: "💊 Walgreens",    custom_id: "retailer_walgreens" },
-          { type: 2, style: 2, label: "💉 CVS",          custom_id: "retailer_cvs"       }
-        ]
       }
     ]
   };
@@ -78,7 +58,7 @@ function buildHelpMessage() {
     embeds: [{
       title: "🤖 Pokemon Restock Bot — Commands",
       color: 0xffcb05,
-      description: "The bot automatically monitors Target, Walmart, Costco, GameStop, Sam's Club, Meijer, Walgreens, and CVS for Pokemon card restocks.",
+      description: "The bot monitors Target and Walmart for Pokemon card restocks. Additional stores (Sam's Club, Meijer, etc.) can be added manually via `/addproduct`.",
       fields: [
         {
           name: "📍 Set Your Location",

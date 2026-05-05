@@ -14,7 +14,7 @@
 import http from "http";
 import { createPublicKey, verify } from "crypto";
 import axios from "axios";
-import { readFileSync } from "fs";
+import { readFileSync, writeFileSync } from "fs";
 import { fileURLToPath } from "url";
 import { dirname, join } from "path";
 import { discord } from "./discord-api.js";
@@ -91,10 +91,15 @@ function handleStatus(botStats) {
     ? `<t:${Math.floor(botStats.lastCheckTime / 1000)}:R>`
     : "not yet";
 
+  const DISPLAY_NAMES = {
+    target: "Target", walmart: "Walmart", costco: "Costco",
+    samsclub: "Sam's Club", meijer: "Meijer", walgreens: "Walgreens", cvs: "CVS"
+  };
+  const zip = process.env.USER_ZIP;
+  const radius = process.env.SEARCH_RADIUS_MILES || "20";
   const byRetailer = Object.entries(botStats.nearbyStores ?? {})
-    .filter(([, s]) => s.length > 0)
-    .map(([r, s]) => `• **${r}**: ${s.length} store(s)`)
-    .join("\n") || "No stores found yet — check your USER_ZIP env var";
+    .map(([r, s]) => s.length ? `• **${DISPLAY_NAMES[r] ?? r}**: ${s.length} store(s)` : `• ~~${DISPLAY_NAMES[r] ?? r}~~ — 0 found`)
+    .join("\n") || (zip ? "No stores found yet — try again in a moment" : "⚠️ USER_ZIP not set in Railway");
 
   return {
     embeds: [{
@@ -104,7 +109,7 @@ function handleStatus(botStats) {
         { name: "Products Tracked", value: String(products.length), inline: true  },
         { name: "Nearby Stores",    value: String(storeCount),      inline: true  },
         { name: "Users Set Up",     value: String(users.length),    inline: true  },
-        { name: "Stores by Retailer", value: byRetailer,            inline: false },
+        { name: `Stores within ${radius}mi of ${zip ?? "⚠️ USER_ZIP not set"}`, value: byRetailer, inline: false },
         { name: "Last Check",       value: lastCheck,               inline: false }
       ],
       timestamp: new Date().toISOString(),
@@ -137,6 +142,57 @@ async function handleTest(discordConfig) {
     return { content: `✅ Test alert sent to <#${discordConfig.channels.all}>!`, flags: 64 };
   } catch (err) {
     return { content: `❌ Couldn't send test alert: ${err.message}`, flags: 64 };
+  }
+}
+
+function handleAddProduct(options) {
+  const retailer = options.find(o => o.name === "retailer")?.value;
+  const url      = options.find(o => o.name === "url")?.value;
+  if (!retailer || !url) return { content: "❌ Both retailer and URL are required.", flags: 64 };
+
+  // Extract item ID from URL based on retailer
+  const PATTERNS = {
+    target:    /\/A-(\d+)/,
+    walmart:   /\/ip\/(?:[^/]+\/)?(\d+)/,
+    costco:    /\.product\.(\d+)/,
+    samsclub:  /\/p\/[^/]+\/([A-Za-z0-9]+)(?:\?|$)/,
+    meijer:    /\/p\/([^/?]+)/,
+    walgreens: /prod(\d+)/,
+    cvs:       /prodid=([^&]+)/
+  };
+
+  const pattern = PATTERNS[retailer];
+  if (!pattern) return { content: `❌ Unknown retailer "${retailer}".`, flags: 64 };
+
+  const match = url.match(pattern);
+  if (!match) return { content: `❌ Couldn't extract a product ID from that URL. Make sure it's a direct product page URL.`, flags: 64 };
+
+  const itemId = match[1];
+
+  let products = [];
+  try { products = JSON.parse(readFileSync(PRODUCTS_FILE, "utf8")); } catch { /* empty */ }
+
+  // Check if this retailer+id combo already exists
+  const alreadyExists = products.some(p => p.retailers[retailer]?.itemId === itemId ||
+    p.retailers[retailer]?.tcin === itemId || p.retailers[retailer]?.sku === itemId ||
+    p.retailers[retailer]?.upc === itemId);
+
+  if (alreadyExists) return { content: `⚠️ That product is already being tracked.`, flags: 64 };
+
+  // Add as a new product entry — name will be filled in on next discovery run
+  const KEY_NAMES = { target: "tcin", walmart: "itemId", costco: "itemNumber", samsclub: "itemId", meijer: "itemId", walgreens: "sku", cvs: "upc" };
+  const newProduct = {
+    name: `Manual entry — ${retailer} ${itemId}`,
+    imageUrl: null, msrp: null,
+    retailers: { [retailer]: { [KEY_NAMES[retailer] ?? "itemId"]: itemId, url } }
+  };
+
+  products.push(newProduct);
+  try {
+    writeFileSync(PRODUCTS_FILE, JSON.stringify(products, null, 2) + "\n");
+    return { content: `✅ Added **${retailer}** product \`${itemId}\` — it will be checked on the next poll cycle.`, flags: 64 };
+  } catch (err) {
+    return { content: `❌ Failed to save: ${err.message}`, flags: 64 };
   }
 }
 
@@ -288,6 +344,25 @@ export async function registerSlashCommands() {
       description: "List all Pokemon products the bot is currently monitoring"
     },
     {
+      name: "addproduct",
+      description: "Manually add a product from Sam's Club, Meijer, or any store URL",
+      options: [
+        {
+          type: 3, name: "retailer", description: "Which store", required: true,
+          choices: [
+            { name: "Sam's Club", value: "samsclub" },
+            { name: "Meijer",     value: "meijer"   },
+            { name: "Costco",     value: "costco"   },
+            { name: "Walgreens",  value: "walgreens"},
+            { name: "CVS",        value: "cvs"      },
+            { name: "Target",     value: "target"   },
+            { name: "Walmart",    value: "walmart"  }
+          ]
+        },
+        { type: 3, name: "url", description: "Direct product page URL", required: true }
+      ]
+    },
+    {
       name: "discover",
       description: "Manually trigger a product discovery scan right now"
     },
@@ -364,6 +439,7 @@ export function startServer(botStats, initialConfig) {
           case "status":      responseData = handleStatus(botStats); break;
           case "test":        responseData = await handleTest(_discordConfig); break;
           case "products":    responseData = handleProducts(); break;
+          case "addproduct":  responseData = handleAddProduct(options); break;
           case "discover":    responseData = await handleDiscover(); break;
           default:            responseData = { content: "Unknown command.", flags: 64 };
         }

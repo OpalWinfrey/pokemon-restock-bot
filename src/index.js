@@ -18,6 +18,7 @@ import { checkWalgreens } from "./checkers/walgreens.js";
 import { checkCVS }       from "./checkers/cvs.js";
 import { sendRestockAlert, sendToLogs } from "./discord.js";
 import { startServer, registerSlashCommands, getDiscordConfig } from "./server.js";
+import { sleepJitter } from "./http.js";
 
 validateEnv();
 
@@ -26,7 +27,7 @@ const PRODUCTS_FILE = join(__dir, "../config/products.json");
 
 const USER_ZIP              = process.env.USER_ZIP;
 const SEARCH_RADIUS_MILES   = parseInt(process.env.SEARCH_RADIUS_MILES   || "20");
-const POLL_INTERVAL         = parseInt(process.env.POLL_INTERVAL_SECONDS || "60");
+const POLL_INTERVAL         = parseInt(process.env.POLL_INTERVAL_SECONDS || "300");
 const DISCOVER_INTERVAL_HRS = parseFloat(process.env.DISCOVER_INTERVAL_HOURS || "12");
 
 export const botStats = { nearbyStores: {}, lastCheckTime: null };
@@ -108,7 +109,9 @@ async function checkAll(storeMap, discordConfig) {
         } catch (err) {
           log.error(`Check failed: ${name} at ${displayName} store ${store.id}:`, err.message);
         }
+        await sleepJitter(300, 150); // 150–450ms between store requests
       }
+      await sleepJitter(1000, 500); // 500ms–1.5s between retailers
     }
   }
 
@@ -129,23 +132,47 @@ await registerSlashCommands();
 const discordConfig = await loadDiscordConfig();
 startServer(botStats, discordConfig);
 
+function storeBreakdown(storeMap) {
+  const lines = [];
+  let total = 0;
+  const empty = [];
+  for (const [key, stores] of Object.entries(storeMap)) {
+    const label = DISPLAY[key] ?? key;
+    if (stores.length) { lines.push(`  • ${label}: ${stores.length} store(s)`); total += stores.length; }
+    else empty.push(label);
+  }
+  if (empty.length) lines.push(`  • (0 stores found for: ${empty.join(", ")})`);
+  return { lines, total };
+}
+
 // Background init — runs after server is already accepting requests
 (async () => {
+  // Delay first discovery 5 min so the server is stable before firing search requests
+  log.info("⏳ First product discovery delayed 5 min to avoid startup blocking...");
+  await new Promise(r => setTimeout(r, 5 * 60 * 1000));
   await discoverProducts();
 
   const storeMap = await buildStoreMap();
   botStats.nearbyStores = storeMap;
 
   const products = JSON.parse(readFileSync(PRODUCTS_FILE, "utf8"));
-  const totalStores = Object.values(storeMap).flat().length;
-  log.info(`📦 Tracking ${products.length} product(s) across ${totalStores} store(s)`);
+  const { lines: breakdownLines, total: totalStores } = storeBreakdown(storeMap);
+
+  if (totalStores === 0) {
+    log.warn("⚠️  No stores found — check that USER_ZIP is set in Railway variables");
+  }
+  log.info(`📦 Tracking ${products.length} product(s)`);
+  log.info(`📍 Stores within ${SEARCH_RADIUS_MILES}mi of ${USER_ZIP ?? "unset"}:`);
+  breakdownLines.forEach(l => log.info(l));
 
   const cfg = getDiscordConfig();
   await sendToLogs(cfg, [
     `🚀 **Bot online** — polling every ${POLL_INTERVAL}s`,
-    `📦 Tracking **${products.length}** product(s) across **${totalStores}** store(s)`,
-    `📍 ZIP: ${USER_ZIP} | Radius: ${SEARCH_RADIUS_MILES}mi`
-  ].join("\n"));
+    `📦 Tracking **${products.length}** product(s)`,
+    `📍 Stores within **${SEARCH_RADIUS_MILES}mi** of \`${USER_ZIP ?? "⚠️ USER_ZIP not set"}\`:`,
+    ...breakdownLines.map(l => l.trim()),
+    totalStores === 0 ? "\n⚠️ **No stores found** — add `USER_ZIP` in Railway Variables and redeploy." : ""
+  ].filter(Boolean).join("\n"));
 
   await checkAll(storeMap, cfg);
 
