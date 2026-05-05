@@ -1,6 +1,6 @@
 import axios from "axios";
 import { log } from "./logger.js";
-import { apiHeaders } from "./http.js";
+import { browserHeaders } from "./http.js";
 
 function fmt(...parts) {
   return parts.filter(Boolean).join(", ");
@@ -9,7 +9,7 @@ function fmt(...parts) {
 async function findTargetStores(zip, radiusMiles) {
   const { data } = await axios.get("https://redsky.target.com/v3/stores/nearby", {
     params: { place: zip, within: radiusMiles, unit: "mile", limit: 20 },
-    headers: apiHeaders({ Referer: "https://www.target.com/" }), timeout: 10000
+    headers: browserHeaders({ Referer: "https://www.target.com/" }), timeout: 10000
   });
   return (data.locations ?? []).map(s => ({
     id: String(s.location_id),
@@ -21,7 +21,7 @@ async function findTargetStores(zip, radiusMiles) {
 async function findWalmartStores(zip, radiusMiles) {
   const { data } = await axios.get("https://www.walmart.com/store/ajax/nearbyStores", {
     params: { zipCode: zip, distance: radiusMiles },
-    headers: apiHeaders({ Referer: "https://www.walmart.com/" }),
+    headers: browserHeaders({ Referer: "https://www.walmart.com/" }),
     timeout: 10000
   });
   const stores = data.payload?.storesMap ?? data.stores ?? [];
@@ -38,7 +38,7 @@ async function findCostcoWarehouses(zip, radiusMiles) {
       serviceType: "ALL", storeId: "10301", catalogId: "10701",
       langId: "-1", countryCode: "US", zip, radiusKm: Math.round(radiusMiles * 1.609)
     },
-    headers: apiHeaders({ Referer: "https://www.costco.com/" }),
+    headers: browserHeaders({ Referer: "https://www.costco.com/" }),
     timeout: 10000
   });
   const warehouses = Array.isArray(data) ? data : data.warehouses ?? data.data ?? [];
@@ -54,7 +54,7 @@ async function findSamsClubStores(zip, radiusMiles) {
     "https://www.samsclub.com/api/node/vivaldi/v2/clubs/search",
     {
       params: { postalCode: zip, distance: radiusMiles },
-      headers: apiHeaders({ Referer: "https://www.samsclub.com/" }),
+      headers: browserHeaders({ Referer: "https://www.samsclub.com/" }),
       timeout: 10000
     }
   );
@@ -69,7 +69,7 @@ async function findSamsClubStores(zip, radiusMiles) {
 async function findMeijerStores(zip, radiusMiles) {
   const { data } = await axios.get("https://www.meijer.com/bin/meijer/store/search", {
     params: { zipCode: zip, radius: radiusMiles, maxResults: 20 },
-    headers: apiHeaders({ Referer: "https://www.meijer.com/" }),
+    headers: browserHeaders({ Referer: "https://www.meijer.com/" }),
     timeout: 10000
   });
   const stores = data?.stores ?? data?.results ?? [];
@@ -83,7 +83,7 @@ async function findMeijerStores(zip, radiusMiles) {
 async function findWalgreenStores(zip, radiusMiles) {
   const { data } = await axios.get("https://www.walgreens.com/locator/results.jsp", {
     params: { async: true, requesttype: "locatornearby", zip, radiusmiles: radiusMiles, maxResults: 20 },
-    headers: apiHeaders({ Referer: "https://www.walgreens.com/" }),
+    headers: browserHeaders({ Referer: "https://www.walgreens.com/" }),
     timeout: 10000
   });
   const stores = data?.results ?? data?.stores ?? [];
@@ -97,7 +97,7 @@ async function findWalgreenStores(zip, radiusMiles) {
 async function findCVSStores(zip, radiusMiles) {
   const { data } = await axios.get("https://www.cvs.com/rest/bean/storeInfo/getNearByStores", {
     params: { location: zip, radius: radiusMiles, maxResults: 20 },
-    headers: apiHeaders({ Referer: "https://www.cvs.com/" }),
+    headers: browserHeaders({ Referer: "https://www.cvs.com/" }),
     timeout: 10000
   });
   const stores = data?.storeList ?? data?.stores ?? [];

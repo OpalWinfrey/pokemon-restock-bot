@@ -269,10 +269,19 @@ function handleStores() {
     samsclub: "Sam's Club", meijer: "Meijer", walgreens: "Walgreens", cvs: "CVS"
   };
 
+  const hasBeenBuilt = Object.keys(storeMap).length > 0;
   const retailers = Object.entries(storeMap).filter(([, s]) => s.length > 0);
+
+  if (!hasBeenBuilt) {
+    return {
+      content: "⏳ The bot is still starting up — store lookup runs 5 minutes after boot. Try again shortly, or run `/setlocation <zip>` to trigger it now.",
+      flags: 64
+    };
+  }
+
   if (!retailers.length) {
     return {
-      content: "No stores loaded yet. Run `/setlocation <zip>` to find stores near you.",
+      content: "⚠️ Store lookup ran but returned 0 results. The retailer APIs may be blocking the server's IP.\n\nCheck Railway logs for lines like `Target: store lookup failed — HTTP 403`. You can also run `/setlocation <zip>` to retry.",
       flags: 64
     };
   }
