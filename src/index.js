@@ -140,6 +140,11 @@ startServer(botStats, discordConfig);
 
   await checkAll(storeMap, getDiscordConfig());
 
-  cron.schedule(`*/${POLL_INTERVAL} * * * * *`, () => checkAll(storeMap, getDiscordConfig()));
-  setInterval(discoverProducts, DISCOVER_INTERVAL_HRS * 60 * 60 * 1000);
+  cron.schedule(`*/${POLL_INTERVAL} * * * * *`, () =>
+    checkAll(storeMap, getDiscordConfig()).catch(err => log.error("checkAll error:", err.message))
+  );
+  setInterval(
+    () => discoverProducts().catch(err => log.error("discoverProducts error:", err.message)),
+    DISCOVER_INTERVAL_HRS * 60 * 60 * 1000
+  );
 })();

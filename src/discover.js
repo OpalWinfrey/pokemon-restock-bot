@@ -211,10 +211,21 @@ export async function discoverProducts() {
 
   log.info(`  Found ${allResults.length} raw results across all search terms`);
 
-  const existing = JSON.parse(readFileSync(PRODUCTS_FILE, "utf8"));
+  let existing = [];
+  try {
+    existing = JSON.parse(readFileSync(PRODUCTS_FILE, "utf8"));
+  } catch {
+    log.warn("products.json unreadable — starting fresh");
+  }
+
   const added = mergeIntoProducts(existing, allResults);
 
-  writeFileSync(PRODUCTS_FILE, JSON.stringify(existing, null, 2) + "\n");
+  try {
+    writeFileSync(PRODUCTS_FILE, JSON.stringify(existing, null, 2) + "\n");
+  } catch (err) {
+    log.error("Failed to save products.json:", err.message);
+  }
+
   log.info(`  ✅ Discovery complete — ${added} new product(s) added, ${existing.length} total tracked`);
 
   return existing;
