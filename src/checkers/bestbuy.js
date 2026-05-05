@@ -1,43 +1,33 @@
 import axios from "axios";
+import { log } from "../logger.js";
 
-// Requires a free Best Buy Developer API key: https://developer.bestbuy.com
 export async function checkBestBuy({ sku, storeId }) {
   const apiKey = process.env.BESTBUY_API_KEY;
-
   if (!apiKey) {
-    console.error("❌ BESTBUY_API_KEY not set in .env");
+    log.warn("Best Buy: BESTBUY_API_KEY not set — skipping");
     return { inStock: false, price: null };
   }
 
-  const url = `https://api.bestbuy.com/v1/products(sku=${sku})`;
-
   try {
-    const response = await axios.get(url, {
-      params: {
-        apiKey,
-        storeId,
-        show: "sku,name,salePrice,inStoreAvailability",
-        format: "json"
-      },
+    const { data } = await axios.get(`https://api.bestbuy.com/v1/products(sku=${sku})`, {
+      params: { apiKey, storeId, show: "sku,name,salePrice,inStoreAvailability", format: "json" },
       timeout: 10000
     });
 
-    const product = response.data?.products?.[0];
+    const product = data?.products?.[0];
+    log.debug("Best Buy response for SKU", sku, product);
 
     if (!product) {
-      console.warn(`⚠️  Best Buy: No product found for SKU ${sku}`);
+      log.warn(`Best Buy: no product found for SKU ${sku}`);
       return { inStock: false, price: null };
     }
 
-    const inStock = product.inStoreAvailability === true;
-    const price = product.salePrice ?? null;
-
-    return { inStock, price };
+    return { inStock: product.inStoreAvailability === true, price: product.salePrice ?? null };
   } catch (err) {
     if (err.response?.status === 429) {
-      console.warn("⚠️  Best Buy: Rate limited. Will retry next cycle.");
+      log.warn("Best Buy: rate limited — will retry next cycle");
     } else {
-      console.error(`❌ Best Buy check failed for SKU ${sku}:`, err.message);
+      log.error(`Best Buy check failed for SKU ${sku}:`, err.message, err.response?.data);
     }
     return { inStock: false, price: null };
   }

@@ -1,4 +1,5 @@
 import axios from "axios";
+import { log } from "../logger.js";
 
 export async function checkCVS({ upc, storeId }) {
   try {
@@ -15,16 +16,15 @@ export async function checkCVS({ upc, storeId }) {
       }
     );
 
+    log.debug("CVS response for UPC", upc, data);
     const storeData = Array.isArray(data) ? data.find(s => String(s.storeId) === String(storeId)) : data;
     const inStock = storeData?.availabilityStatus === "IN_STOCK" || storeData?.available === true;
-    const price = storeData?.price ?? null;
-
-    return { inStock, price };
+    return { inStock, price: storeData?.price ?? null };
   } catch (err) {
     if (err.response?.status === 429) {
-      console.warn("⚠️  CVS: Rate limited. Will retry next cycle.");
+      log.warn("CVS: rate limited — will retry next cycle");
     } else {
-      console.error(`❌ CVS check failed for UPC ${upc}:`, err.message);
+      log.error(`CVS check failed for UPC ${upc}:`, err.message, err.response?.data);
     }
     return { inStock: false, price: null };
   }

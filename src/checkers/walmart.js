@@ -1,23 +1,25 @@
 import axios from "axios";
+import { log } from "../logger.js";
 
 export async function checkWalmart({ itemId, storeId }) {
-  const url = `https://www.walmart.com/store/ajax/selected-item/details`;
-
   try {
-    const response = await axios.get(url, {
-      params: { itemId, storeId },
-      headers: {
-        "User-Agent":
-          "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-        Accept: "application/json"
-      },
-      timeout: 10000
-    });
+    const { data } = await axios.get(
+      "https://www.walmart.com/store/ajax/selected-item/details",
+      {
+        params: { itemId, storeId },
+        headers: {
+          "User-Agent":
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+          Accept: "application/json"
+        },
+        timeout: 10000
+      }
+    );
 
-    const data = response.data;
+    log.debug("Walmart response for item", itemId, data);
 
     if (!data) {
-      console.warn(`⚠️  Walmart: No data returned for item ${itemId}`);
+      log.warn(`Walmart: no data for item ${itemId}`);
       return { inStock: false, price: null };
     }
 
@@ -32,9 +34,9 @@ export async function checkWalmart({ itemId, storeId }) {
     return { inStock, price };
   } catch (err) {
     if (err.response?.status === 429) {
-      console.warn("⚠️  Walmart: Rate limited. Will retry next cycle.");
+      log.warn("Walmart: rate limited — will retry next cycle");
     } else {
-      console.error(`❌ Walmart check failed for item ${itemId}:`, err.message);
+      log.error(`Walmart check failed for item ${itemId}:`, err.message, err.response?.data);
     }
     return { inStock: false, price: null };
   }

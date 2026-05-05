@@ -1,4 +1,5 @@
 import axios from "axios";
+import { log } from "../logger.js";
 
 export async function checkWalgreens({ sku, storeNum }) {
   try {
@@ -16,15 +17,14 @@ export async function checkWalgreens({ sku, storeNum }) {
       }
     );
 
+    log.debug("Walgreens response for SKU", sku, data);
     const inStock = data?.availability === "IN_STOCK" || data?.inStock === true;
-    const price = data?.price ?? null;
-
-    return { inStock, price };
+    return { inStock, price: data?.price ?? null };
   } catch (err) {
     if (err.response?.status === 429) {
-      console.warn("⚠️  Walgreens: Rate limited. Will retry next cycle.");
+      log.warn("Walgreens: rate limited — will retry next cycle");
     } else {
-      console.error(`❌ Walgreens check failed for SKU ${sku}:`, err.message);
+      log.error(`Walgreens check failed for SKU ${sku}:`, err.message, err.response?.data);
     }
     return { inStock: false, price: null };
   }

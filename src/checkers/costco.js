@@ -1,18 +1,12 @@
 import axios from "axios";
+import { log } from "../logger.js";
 
-// Costco has no public inventory API. This checks warehouse pickup availability
-// via the internal endpoint their site uses — may break if Costco changes their API.
 export async function checkCostco({ itemNumber, warehouseId }) {
-  const url = "https://www.costco.com/AjaxWarehousePickupAvailabilityView";
-
   try {
-    const response = await axios.get(url, {
+    const { data } = await axios.get("https://www.costco.com/AjaxWarehousePickupAvailabilityView", {
       params: {
-        storeId: "10301",
-        catalogId: "10701",
-        langId: "-1",
-        productId: itemNumber,
-        warehouseId
+        storeId: "10301", catalogId: "10701", langId: "-1",
+        productId: itemNumber, warehouseId
       },
       headers: {
         "User-Agent":
@@ -22,19 +16,18 @@ export async function checkCostco({ itemNumber, warehouseId }) {
       timeout: 10000
     });
 
-    const body = typeof response.data === "string" ? response.data : JSON.stringify(response.data);
+    const body = typeof data === "string" ? data : JSON.stringify(data);
+    log.debug("Costco response for item", itemNumber, body.slice(0, 300));
 
-    // Costco embeds availability status as a text marker in the response
     const inStock = /in.?stock|add.to.cart|available/i.test(body) &&
                     !/out.of.stock|not.available|unavailable/i.test(body);
 
-    // Price is not reliably returned by this endpoint
     return { inStock, price: null };
   } catch (err) {
     if (err.response?.status === 429) {
-      console.warn("⚠️  Costco: Rate limited. Will retry next cycle.");
+      log.warn("Costco: rate limited — will retry next cycle");
     } else {
-      console.error(`❌ Costco check failed for item ${itemNumber}:`, err.message);
+      log.error(`Costco check failed for item ${itemNumber}:`, err.message, err.response?.data);
     }
     return { inStock: false, price: null };
   }
