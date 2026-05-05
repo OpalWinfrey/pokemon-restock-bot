@@ -112,34 +112,46 @@ export async function sendRestockAlert({
 }
 
 // Called from discovery when a product is newly flagged or un-flagged as out of print
-export async function sendOutOfPrintUpdate(discordConfig, product, wasOutOfPrint) {
+// Send a single batched message for all out-of-print flag changes in one discovery cycle.
+export async function sendOutOfPrintBatch(discordConfig, flagChanges) {
   const channelId = discordConfig?.channels?.outOfPrint;
-  if (!channelId) return;
-  const msrp = getReferenceMsrp(product.name);
+  if (!channelId || !flagChanges.length) return;
+
+  const nowFlagged = flagChanges.filter(f => !f.wasOutOfPrint && f.product.outOfPrint);
+  const nowReprinted = flagChanges.filter(f => f.wasOutOfPrint && !f.product.outOfPrint);
+
+  const embeds = [];
+
+  if (nowFlagged.length) {
+    const lines = nowFlagged.map(({ product }) => {
+      const msrp = getReferenceMsrp(product.name);
+      return `• **${product.name}**${msrp ? ` — MSRP ~$${msrp.toFixed(2)}` : ""}`;
+    });
+    embeds.push({
+      title: `📛 ${nowFlagged.length} Product(s) Flagged as Out of Print`,
+      color: 0x95a5a6,
+      description: lines.join("\n") + "\n\nAll retailers show reseller pricing (>2× MSRP). Restock alerts paused. Flag clears automatically if reprinted.",
+      timestamp: new Date().toISOString()
+    });
+  }
+
+  if (nowReprinted.length) {
+    const lines = nowReprinted.map(({ product }) => {
+      const msrp = getReferenceMsrp(product.name);
+      return `• **${product.name}**${msrp ? ` — ~$${msrp.toFixed(2)} MSRP` : ""}`;
+    });
+    embeds.push({
+      title: `✅ ${nowReprinted.length} Product(s) Back In Print!`,
+      color: 0x2ecc71,
+      description: lines.join("\n") + "\n\nShowing at retail pricing again. Restock alerts are now active.",
+      timestamp: new Date().toISOString()
+    });
+  }
+
   try {
-    if (!wasOutOfPrint && product.outOfPrint) {
-      // Newly flagged
-      await discord.sendMessage(channelId, {
-        embeds: [{
-          title: "📛 Flagged as Out of Print",
-          color: 0x95a5a6,
-          description: `**${product.name}**\nAll retailers show prices ${msrp ? `above $${(msrp * 2).toFixed(2)} (2× MSRP of $${msrp.toFixed(2)})` : "far above expected retail"}. No restock alerts will fire for reseller-priced stock.\nIf a reprint is announced, this flag will clear automatically.`,
-          timestamp: new Date().toISOString()
-        }]
-      });
-    } else if (wasOutOfPrint && !product.outOfPrint) {
-      // Reprinted — back in stock at retail price or found on Pokemon Center
-      await discord.sendMessage(channelId, {
-        embeds: [{
-          title: "✅ Back In Print!",
-          color: 0x2ecc71,
-          description: `**${product.name}**\nThis product is showing at retail pricing again${msrp ? ` (~$${msrp.toFixed(2)} MSRP)` : ""}. Restock alerts are now active.`,
-          timestamp: new Date().toISOString()
-        }]
-      });
-    }
+    await discord.sendMessage(channelId, { embeds });
   } catch (err) {
-    log.warn("Failed to send out-of-print update:", err.message);
+    log.warn("Failed to send out-of-print batch update:", err.message);
   }
 }
 

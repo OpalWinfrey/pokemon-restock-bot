@@ -5,7 +5,7 @@ import { dirname, join } from "path";
 import { log } from "./logger.js";
 import { browserHeaders, apiHeaders, sleepJitter } from "./http.js";
 import { getReferenceMsrp, isLikelyOutOfPrint } from "./classify.js";
-import { sendOutOfPrintUpdate } from "./discord.js";
+import { sendOutOfPrintBatch } from "./discord.js";
 
 const __dir = dirname(fileURLToPath(import.meta.url));
 const PRODUCTS_FILE = join(__dir, "../config/products.json");
@@ -295,9 +295,7 @@ export async function discoverProducts(discordConfig = null) {
   if (flagChanges.length) {
     log.info(`  📛 ${flagChanges.length} out-of-print flag change(s)`);
     if (discordConfig) {
-      for (const { product, wasOutOfPrint } of flagChanges) {
-        await sendOutOfPrintUpdate(discordConfig, product, wasOutOfPrint).catch(() => {});
-      }
+      await sendOutOfPrintBatch(discordConfig, flagChanges).catch(() => {});
     }
   }
 
