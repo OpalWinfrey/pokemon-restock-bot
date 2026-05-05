@@ -48,19 +48,25 @@ function isPokemonCard(name) {
 
 async function searchTarget(term) {
   const { data } = await axios.get(
-    "https://redsky.target.com/redsky_aggregations/v1/web/plp_search_v1",
+    "https://redsky.target.com/redsky_aggregations/v1/web/plp_search_v2",
     {
-      params: { keyword: term, count: 24, offset: 0, channel: "WEB", visitor_id: "anonymous" },
-      headers: apiHeaders({ Referer: "https://www.target.com/" }), timeout: 15000
+      params: {
+        keyword: term, count: 24, offset: 0, channel: "WEB",
+        visitor_id: "anonymous", pricing_store_id: "3991",
+        page: "/s/pokemon",
+        key: "9f36aeafbe60771e321a7cc95a78140772ab3e96"
+      },
+      headers: apiHeaders({ Referer: "https://www.target.com/", Origin: "https://www.target.com" }),
+      timeout: 15000
     }
   );
   return (data?.data?.search?.products ?? []).map(p => {
-    const tcin = p.item?.tcin;
+    const tcin = p.tcin;
     const images = p.item?.enrichment?.images;
     return {
       name: p.item?.product_description?.title ?? "",
       imageUrl: images?.primary_image_url ?? null,
-      price: p.item?.price?.current_retail ?? null,
+      price: p.price?.current_retail ?? null,
       retailer: "target",
       cfg: { tcin, url: `https://www.target.com/p/-/A-${tcin}` }
     };
@@ -106,8 +112,8 @@ async function searchSamsClub(term) {
   })).filter(p => p.name && p.cfg.itemId && isPokemonCard(p.name));
 }
 
-const SEARCH_RETAILERS = ["target", "walmart", "samsclub"];
-const SEARCH_FNS = [searchTarget, searchWalmart, searchSamsClub];
+const SEARCH_RETAILERS = ["target", "walmart"];
+const SEARCH_FNS = [searchTarget, searchWalmart];
 
 // Run one search term against all retailers sequentially with jitter to avoid blocks
 async function runTerm(term) {
