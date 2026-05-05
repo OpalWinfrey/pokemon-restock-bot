@@ -26,13 +26,12 @@ function buildPickerMessage(roleIds) {
   return {
     content: [
       "## 🎴 Pokemon Restock Alerts",
+      "Tap what you want to be pinged for. Tap again to turn it off.",
       "",
-      "**STEP 1 — What types do you want?** Click to toggle (click again to remove)",
-      "ETB = Elite Trainer Box | Premium = special/ultra collections | Bundles = booster bundles",
+      "**Product Types** — pick as many as you want",
+      "> ETB = Elite Trainer Box · Premium = special & ultra collections",
       "",
-      "**STEP 2 — Which stores?** All stores are ON by default. Click to turn one off.",
-      "",
-      "_New Pokemon sets are found automatically — nothing to update when a new set drops._"
+      "**Stores** — all on by default, tap to mute one",
     ].join("\n"),
     components: [
       {
@@ -89,7 +88,7 @@ function buildHelpMessage() {
         },
         {
           name: "🔔 Pick Your Alerts",
-          value: `Head to <#pick-your-alerts> and click the buttons for the product types you want to be pinged about. Click again to turn off.`,
+          value: `Go to <#pick-your-alerts> and tap what you want. Tap again to turn it off. All stores are on by default — tap a store button to mute it.`,
           inline: false
         },
         {
