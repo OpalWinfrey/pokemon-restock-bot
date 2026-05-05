@@ -1,20 +1,7 @@
-import { log } from "./logger.js";
-
-// All retailer store locator APIs block requests from cloud/datacenter IPs.
-// We no longer attempt automated store lookup. Instead:
-//   - Target and Walmart are checked for online (ship-to-address) stock
-//   - Pokemon Center is checked for online drops
-//   - Users can add their own store IDs via /addstore for in-store alerts
-export function getStoresNearZip() {
-  log.info("  ℹ️  Store locator skipped — all retailer APIs block cloud IPs. Checking online stock only.");
-  return { target: [], walmart: [], costco: [], samsclub: [], meijer: [], walgreens: [], cvs: [] };
-}
-
-// Stores added manually by users via /addstore command
-// Stored in config/stores.json as { retailer, storeId, storeName, zip }
-import { readFileSync } from "fs";
+import { readFileSync, writeFileSync } from "fs";
 import { fileURLToPath } from "url";
 import { dirname, join } from "path";
+import { log } from "./logger.js";
 
 const __dir = dirname(fileURLToPath(import.meta.url));
 export const STORES_FILE = join(__dir, "../config/stores.json");
@@ -35,4 +22,26 @@ export function buildManualStoreMap() {
     map[s.retailer].push({ id: String(s.storeId), name: s.storeName, address: s.address ?? "" });
   }
   return map;
+}
+
+// Returns { added: true } or { added: false, reason } if duplicate
+export function addManualStore({ retailer, storeId, storeName, address = "" }) {
+  const stores = getManualStores();
+  const id = String(storeId);
+  const existing = stores.find(s => s.retailer === retailer && String(s.storeId) === id);
+  if (existing) return { added: false, reason: `${existing.storeName} is already in the list.` };
+  stores.push({ retailer, storeId: id, storeName, address });
+  writeFileSync(STORES_FILE, JSON.stringify(stores, null, 2) + "\n");
+  log.info(`Manual store added: ${storeName} (${retailer} #${id})`);
+  return { added: true };
+}
+
+export function removeManualStore({ retailer, storeId }) {
+  const stores = getManualStores();
+  const id = String(storeId);
+  const before = stores.length;
+  const filtered = stores.filter(s => !(s.retailer === retailer && String(s.storeId) === id));
+  if (filtered.length === before) return { removed: false };
+  writeFileSync(STORES_FILE, JSON.stringify(filtered, null, 2) + "\n");
+  return { removed: true };
 }

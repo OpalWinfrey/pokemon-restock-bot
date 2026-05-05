@@ -21,6 +21,7 @@ import { discord } from "./discord-api.js";
 import { runSetup, setupSummaryMessage } from "./setup.js";
 import { ROLE_NAMES, loadDiscordConfig } from "./discord-config.js";
 import { setUserLocation, getUsers, toggleRetailerPref } from "./users.js";
+import { addManualStore, removeManualStore, getManualStores } from "./stores.js";
 import { discoverProducts } from "./discover.js";
 import { log } from "./logger.js";
 
@@ -301,6 +302,60 @@ function handleStores() {
   return { content: content.length > 1950 ? content.slice(0, 1947) + "..." : content, flags: 64 };
 }
 
+function handleAddStore(options) {
+  const retailer  = options.find(o => o.name === "retailer")?.value;
+  const storeId   = options.find(o => o.name === "store_id")?.value?.trim();
+  const storeName = options.find(o => o.name === "store_name")?.value?.trim();
+
+  if (!retailer || !storeId) {
+    return { content: "❌ Retailer and store ID are required.", flags: 64 };
+  }
+
+  const DISPLAY_NAMES = { target: "Target", walmart: "Walmart", costco: "Costco",
+    samsclub: "Sam's Club", meijer: "Meijer", walgreens: "Walgreens", cvs: "CVS" };
+  const label = DISPLAY_NAMES[retailer] ?? retailer;
+  const name = storeName || `${label} #${storeId}`;
+
+  const result = addManualStore({ retailer, storeId, storeName: name });
+  if (!result.added) {
+    return { content: `⚠️ Already tracking: **${result.reason}**`, flags: 64 };
+  }
+
+  // Rebuild store map so the next poll cycle picks it up
+  if (_rebuildStoreMap) {
+    _rebuildStoreMap().then(map => { if (_botStats) _botStats.nearbyStores = map; }).catch(() => {});
+  }
+
+  return {
+    content: [
+      `✅ Added **${name}** (${label} store #${storeId})`,
+      `The next check cycle will test if in-store availability works from Railway's IP.`,
+      `Watch #bot-logs — if you see \`Out of stock: ... at ${name}\` it's working. A 403/412 error means it's blocked.`
+    ].join("\n"),
+    flags: 64
+  };
+}
+
+function handleRemoveStore(options) {
+  const retailer = options.find(o => o.name === "retailer")?.value;
+  const storeId  = options.find(o => o.name === "store_id")?.value?.trim();
+
+  if (!retailer || !storeId) {
+    return { content: "❌ Retailer and store ID are required.", flags: 64 };
+  }
+
+  const result = removeManualStore({ retailer, storeId });
+  if (!result.removed) {
+    return { content: `⚠️ Store #${storeId} not found in the list.`, flags: 64 };
+  }
+
+  if (_rebuildStoreMap) {
+    _rebuildStoreMap().then(map => { if (_botStats) _botStats.nearbyStores = map; }).catch(() => {});
+  }
+
+  return { content: `✅ Removed store #${storeId} from monitoring.`, flags: 64 };
+}
+
 async function handleDiscover() {
   // Fire off discovery in background and respond immediately
   discoverProducts()
@@ -441,6 +496,41 @@ export async function registerSlashCommands() {
       description: "Show all stores currently being monitored and their locations"
     },
     {
+      name: "addstore",
+      description: "Manually add a store for in-store stock checking (get store ID from the retailer's website)",
+      options: [
+        {
+          type: 3, name: "retailer", description: "Which retailer", required: true,
+          choices: [
+            { name: "Target",     value: "target"   },
+            { name: "Walmart",    value: "walmart"  },
+            { name: "Costco",     value: "costco"   },
+            { name: "Sam's Club", value: "samsclub" },
+            { name: "Meijer",     value: "meijer"   }
+          ]
+        },
+        { type: 3, name: "store_id",   description: "Store ID number (from the store's URL on their website)", required: true },
+        { type: 3, name: "store_name", description: "Friendly name (e.g. 'Target Cincinnati Eastgate')", required: false }
+      ]
+    },
+    {
+      name: "removestore",
+      description: "Remove a manually-added store from monitoring",
+      options: [
+        {
+          type: 3, name: "retailer", description: "Which retailer", required: true,
+          choices: [
+            { name: "Target",     value: "target"   },
+            { name: "Walmart",    value: "walmart"  },
+            { name: "Costco",     value: "costco"   },
+            { name: "Sam's Club", value: "samsclub" },
+            { name: "Meijer",     value: "meijer"   }
+          ]
+        },
+        { type: 3, name: "store_id", description: "Store ID number to remove", required: true }
+      ]
+    },
+    {
       name: "discover",
       description: "Manually trigger a product discovery scan right now"
     },
@@ -519,7 +609,9 @@ export function startServer(botStats, initialConfig, rebuildStoreMap) {
           case "status":      responseData = handleStatus(botStats); break;
           case "test":        responseData = await handleTest(_discordConfig); break;
           case "products":    responseData = handleProducts(); break;
-          case "stores":      responseData = handleStores(); break;
+          case "stores":       responseData = handleStores(); break;
+          case "addstore":     responseData = handleAddStore(options); break;
+          case "removestore":  responseData = handleRemoveStore(options); break;
           case "addproduct":  responseData = handleAddProduct(options); break;
           case "discover":    responseData = await handleDiscover(); break;
           default:            responseData = { content: "Unknown command.", flags: 64 };

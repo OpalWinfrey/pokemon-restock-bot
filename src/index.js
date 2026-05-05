@@ -81,6 +81,7 @@ async function checkAll(storeMap, discordConfig) {
     for (const [retailerKey, cfg] of Object.entries(retailers)) {
       const displayName = DISPLAY[retailerKey] ?? retailerKey;
 
+      // Online check (target, walmart, pokemoncenter — always runs)
       if (ONLINE_ONLY_CHECKERS[retailerKey]) {
         try {
           const { inStock, price } = await ONLINE_ONLY_CHECKERS[retailerKey](cfg);
@@ -107,44 +108,40 @@ async function checkAll(storeMap, discordConfig) {
           log.error(`Online check failed: ${name} at ${displayName}:`, err.message);
         }
         await sleepJitter(1000, 500);
+      }
+
+      // In-store check — only runs if stores were manually added via /addstore
+      const manualStores = storeMap[retailerKey] ?? [];
+      if (manualStores.length && CHECKERS[retailerKey]) {
+        for (const store of manualStores) {
+          try {
+            const { inStock, price } = await CHECKERS[retailerKey](cfg, store.id);
+            const key = stateKey(name, retailerKey, store.id);
+            if (inStock) {
+              stockCounts[key] = (stockCounts[key] ?? 0) + 1;
+              if (stockCounts[key] === 2) {
+                log.info(`IN-STORE RESTOCK confirmed: ${name} at ${displayName} — ${store.name}`);
+                restocksFound++;
+                await sendRestockAlert({
+                  productName: name, retailer: displayName, retailerKey,
+                  storeName: store.name, storeAddress: store.address, storeId: store.id,
+                  url: cfg.url, price, imageUrl, msrp, discordConfig
+                });
+              } else {
+                log.debug(`In-store in stock (${stockCounts[key]}/2): ${name} at ${store.name}`);
+              }
+            } else {
+              stockCounts[key] = 0;
+            }
+          } catch (err) {
+            log.error(`In-store check failed: ${name} at ${store.name}:`, err.message);
+          }
+          await sleepJitter(300, 150);
+        }
+        await sleepJitter(1000, 500);
         continue;
       }
 
-      const stores = storeMap[retailerKey] ?? [];
-      if (!stores.length) continue;
-
-      const checker = CHECKERS[retailerKey];
-      if (!checker) { log.warn(`No checker for "${retailerKey}" — skipping`); continue; }
-
-      for (const store of stores) {
-        try {
-          const { inStock, price } = await checker(cfg, store.id);
-          const key = stateKey(name, retailerKey, store.id);
-
-          if (inStock) {
-            stockCounts[key] = (stockCounts[key] ?? 0) + 1;
-            // Confirm in stock on 2 consecutive checks before alerting
-            if (stockCounts[key] === 2) {
-              log.info(`RESTOCK confirmed: ${name} at ${displayName} — ${store.name}`);
-              restocksFound++;
-              await sendRestockAlert({
-                productName: name, retailer: displayName, retailerKey,
-                storeName: store.name, storeAddress: store.address, storeId: store.id,
-                url: cfg.url, price, imageUrl, msrp, discordConfig
-              });
-            } else {
-              log.debug(`In stock (${stockCounts[key]}/2 confirmations): ${name} at ${displayName} — ${store.name}`);
-            }
-          } else {
-            stockCounts[key] = 0;
-            log.debug(`Out of stock: ${name} at ${displayName} — ${store.name}`);
-          }
-        } catch (err) {
-          log.error(`Check failed: ${name} at ${displayName} store ${store.id}:`, err.message);
-        }
-        await sleepJitter(300, 150); // 150–450ms between store requests
-      }
-      await sleepJitter(1000, 500); // 500ms–1.5s between retailers
     }
   }
 
