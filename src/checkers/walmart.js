@@ -1,3 +1,4 @@
+import { apiHeaders } from "../http.js";
 import axios from "axios";
 import { log } from "../logger.js";
 
@@ -7,11 +8,7 @@ export async function checkWalmart({ itemId, storeId }) {
       "https://www.walmart.com/store/ajax/selected-item/details",
       {
         params: { itemId, storeId },
-        headers: {
-          "User-Agent":
-            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-          Accept: "application/json"
-        },
+        headers: apiHeaders({ Referer: "https://www.walmart.com/" }),
         timeout: 10000
       }
     );

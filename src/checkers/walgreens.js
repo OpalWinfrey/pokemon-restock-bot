@@ -1,3 +1,4 @@
+import { apiHeaders } from "../http.js";
 import axios from "axios";
 import { log } from "../logger.js";
 
@@ -7,12 +8,7 @@ export async function checkWalgreens({ sku, storeNum }) {
       "https://www.walgreens.com/store/store/details/inStore/storeProductAvailability",
       { storeNum, skuId: sku },
       {
-        headers: {
-          "User-Agent":
-            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-          "Content-Type": "application/json",
-          Accept: "application/json"
-        },
+        headers: apiHeaders({ "Content-Type": "application/json", Referer: "https://www.walgreens.com/" }),
         timeout: 10000
       }
     );

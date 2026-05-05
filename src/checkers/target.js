@@ -1,5 +1,6 @@
 import axios from "axios";
 import { log } from "../logger.js";
+import { apiHeaders } from "../http.js";
 
 export async function checkTarget({ tcin, storeId }) {
   try {
@@ -10,10 +11,7 @@ export async function checkTarget({ tcin, storeId }) {
           tcin, store_id: storeId, pricing_store_id: storeId,
           has_store_id: true, visitor_id: "anonymous", channel: "WEB", page: `/p/A-${tcin}`
         },
-        headers: {
-          "User-Agent":
-            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-        },
+        headers: apiHeaders({ Referer: "https://www.target.com/" }),
         timeout: 10000
       }
     );

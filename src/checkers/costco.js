@@ -1,3 +1,4 @@
+import { apiHeaders } from "../http.js";
 import axios from "axios";
 import { log } from "../logger.js";
 
@@ -8,11 +9,7 @@ export async function checkCostco({ itemNumber, warehouseId }) {
         storeId: "10301", catalogId: "10701", langId: "-1",
         productId: itemNumber, warehouseId
       },
-      headers: {
-        "User-Agent":
-          "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-        Accept: "text/html,application/json"
-      },
+      headers: apiHeaders({ Referer: "https://www.costco.com/" }),
       timeout: 10000
     });
 

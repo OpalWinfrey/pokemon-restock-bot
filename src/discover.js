@@ -3,12 +3,11 @@ import { readFileSync, writeFileSync } from "fs";
 import { fileURLToPath } from "url";
 import { dirname, join } from "path";
 import { log } from "./logger.js";
+import { browserHeaders, apiHeaders, sleepJitter } from "./http.js";
 
 const __dir = dirname(fileURLToPath(import.meta.url));
 const PRODUCTS_FILE = join(__dir, "../config/products.json");
 
-// Every meaningful Pokemon card product type. Multiple terms catch products
-// that only appear under one category heading on a given retailer's site.
 const SEARCH_TERMS = [
   "pokemon elite trainer box",
   "pokemon booster box",
@@ -21,11 +20,6 @@ const SEARCH_TERMS = [
   "pokemon blister pack",
   "pokemon trading cards"
 ];
-
-const HEADERS = {
-  "User-Agent":
-    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-};
 
 // --- Name normalization + dedup ---
 
@@ -57,7 +51,7 @@ async function searchTarget(term) {
     "https://redsky.target.com/redsky_aggregations/v1/web/plp_search_v1",
     {
       params: { keyword: term, count: 24, offset: 0, channel: "WEB", visitor_id: "anonymous" },
-      headers: HEADERS, timeout: 15000
+      headers: apiHeaders({ Referer: "https://www.target.com/" }), timeout: 15000
     }
   );
   return (data?.data?.search?.products ?? []).map(p => {
@@ -76,7 +70,7 @@ async function searchTarget(term) {
 async function searchWalmart(term) {
   const { data: html } = await axios.get("https://www.walmart.com/search", {
     params: { q: term },
-    headers: { ...HEADERS, Accept: "text/html" }, timeout: 15000
+    headers: browserHeaders({ Referer: "https://www.walmart.com/" }), timeout: 15000
   });
   const match = html.match(/<script id="__NEXT_DATA__" type="application\/json">([\s\S]*?)<\/script>/);
   if (!match) return [];
@@ -91,33 +85,12 @@ async function searchWalmart(term) {
   })).filter(p => p.name && isPokemonCard(p.name));
 }
 
-async function searchGameStop(term) {
-  const { data } = await axios.get(
-    "https://www.gamestop.com/on/demandware.store/Sites-gamestop-us-Site/en_US/Search-UpdateGrid",
-    {
-      params: { q: term, start: 0, sz: 24, format: "ajax" },
-      headers: { ...HEADERS, Accept: "application/json, text/html" }, timeout: 15000
-    }
-  );
-  const products = data?.hits ?? data?.productSearchResult?.hits ?? [];
-  return products.map(p => ({
-    name: p.productName ?? p.name ?? "",
-    imageUrl: p.images?.[0]?.url ?? null,
-    price: p.price?.sales?.value ?? null,
-    retailer: "gamestop",
-    cfg: {
-      productId: p.id ?? p.productID,
-      url: `https://www.gamestop.com${p.selectedProductUrl ?? ""}`
-    }
-  })).filter(p => p.name && p.cfg.productId && isPokemonCard(p.name));
-}
-
 async function searchSamsClub(term) {
   const { data } = await axios.get(
     "https://www.samsclub.com/api/node/vivaldi/v2/products/search",
     {
       params: { searchTerm: term, pageSize: 24, offset: 0 },
-      headers: { ...HEADERS, Accept: "application/json" }, timeout: 15000
+      headers: apiHeaders({ Referer: "https://www.samsclub.com/" }), timeout: 15000
     }
   );
   const items = data?.payload?.records ?? [];
@@ -133,16 +106,24 @@ async function searchSamsClub(term) {
   })).filter(p => p.name && p.cfg.itemId && isPokemonCard(p.name));
 }
 
-// Run one search term against all retailers, return flat array
+const SEARCH_RETAILERS = ["target", "walmart", "samsclub"];
+const SEARCH_FNS = [searchTarget, searchWalmart, searchSamsClub];
+
+// Run one search term against all retailers sequentially with jitter to avoid blocks
 async function runTerm(term) {
   log.debug(`  Searching: "${term}"`);
-  const results = await Promise.allSettled([
-    searchTarget(term),
-    searchWalmart(term),
-    searchGameStop(term),
-    searchSamsClub(term)
-  ]);
-  return results.flatMap(r => r.status === "fulfilled" ? r.value : []);
+  const allResults = [];
+  for (let i = 0; i < SEARCH_FNS.length; i++) {
+    try {
+      const results = await SEARCH_FNS[i](term);
+      log.debug(`  ${SEARCH_RETAILERS[i]}: ${results.length} result(s) for "${term}"`);
+      allResults.push(...results);
+    } catch (err) {
+      log.warn(`  ${SEARCH_RETAILERS[i]}: search failed for "${term}" — ${err.response?.status ?? err.message}`);
+    }
+    if (i < SEARCH_FNS.length - 1) await sleepJitter(1500, 500); // 1-2s between retailers
+  }
+  return allResults;
 }
 
 // --- MSRP detection: lowest price seen for a product across all retailers ---
@@ -202,11 +183,12 @@ async function trySearch(retailer, fn) {
 export async function discoverProducts() {
   log.info("\n🧭 Auto-discovering Pokemon products...");
 
-  // Run all search terms, collect everything, then merge
+  // Run search terms sequentially with delays to avoid rate limiting
   const allResults = [];
-  for (const term of SEARCH_TERMS) {
-    const results = await runTerm(term);
+  for (let i = 0; i < SEARCH_TERMS.length; i++) {
+    const results = await runTerm(SEARCH_TERMS[i]);
     allResults.push(...results);
+    if (i < SEARCH_TERMS.length - 1) await sleepJitter(2000, 1000); // 1-3s between terms
   }
 
   log.info(`  Found ${allResults.length} raw results across all search terms`);

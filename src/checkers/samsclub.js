@@ -1,3 +1,4 @@
+import { apiHeaders } from "../http.js";
 import axios from "axios";
 import { log } from "../logger.js";
 
@@ -8,11 +9,7 @@ export async function checkSamsClub({ itemId, clubId }) {
       "https://www.samsclub.com/api/node/vivaldi/v2/products/search/product-detail",
       {
         params: { skuId: itemId, clubId },
-        headers: {
-          "User-Agent":
-            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-          Accept: "application/json"
-        },
+        headers: apiHeaders({ Referer: "https://www.samsclub.com/" }),
         timeout: 10000
       }
     );

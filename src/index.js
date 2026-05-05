@@ -12,7 +12,6 @@ import { getUsers } from "./users.js";
 import { checkTarget }    from "./checkers/target.js";
 import { checkWalmart }   from "./checkers/walmart.js";
 import { checkCostco }    from "./checkers/costco.js";
-import { checkGameStop }  from "./checkers/gamestop.js";
 import { checkSamsClub }  from "./checkers/samsclub.js";
 import { checkMeijer }    from "./checkers/meijer.js";
 import { checkWalgreens } from "./checkers/walgreens.js";
@@ -41,7 +40,6 @@ const CHECKERS = {
   target:    (cfg, id) => checkTarget({ tcin: cfg.tcin, storeId: id }),
   walmart:   (cfg, id) => checkWalmart({ itemId: cfg.itemId, storeId: id }),
   costco:    (cfg, id) => checkCostco({ itemNumber: cfg.itemNumber, warehouseId: id }),
-  gamestop:  (cfg, id) => checkGameStop({ productId: cfg.productId, storeId: id }),
   samsclub:  (cfg, id) => checkSamsClub({ itemId: cfg.itemId, clubId: id }),
   meijer:    (cfg, id) => checkMeijer({ itemId: cfg.itemId, storeId: id }),
   walgreens: (cfg, id) => checkWalgreens({ sku: cfg.sku, storeNum: id }),
@@ -50,7 +48,7 @@ const CHECKERS = {
 
 const DISPLAY = {
   target: "Target", walmart: "Walmart", costco: "Costco",
-  gamestop: "GameStop", samsclub: "Sam's Club", meijer: "Meijer",
+  samsclub: "Sam's Club", meijer: "Meijer",
   walgreens: "Walgreens", cvs: "CVS"
 };
 
@@ -142,13 +140,27 @@ startServer(botStats, discordConfig);
   const totalStores = Object.values(storeMap).flat().length;
   log.info(`📦 Tracking ${products.length} product(s) across ${totalStores} store(s)`);
 
-  await checkAll(storeMap, getDiscordConfig());
+  const cfg = getDiscordConfig();
+  await sendToLogs(cfg, [
+    `🚀 **Bot online** — polling every ${POLL_INTERVAL}s`,
+    `📦 Tracking **${products.length}** product(s) across **${totalStores}** store(s)`,
+    `📍 ZIP: ${USER_ZIP} | Radius: ${SEARCH_RADIUS_MILES}mi`
+  ].join("\n"));
+
+  await checkAll(storeMap, cfg);
 
   cron.schedule(`*/${POLL_INTERVAL} * * * * *`, () =>
-    checkAll(storeMap, getDiscordConfig()).catch(err => log.error("checkAll error:", err.message))
+    checkAll(storeMap, getDiscordConfig()).catch(async err => {
+      log.error("checkAll error:", err.message);
+      await sendToLogs(getDiscordConfig(), `❌ Check loop error: ${err.message}`);
+    })
   );
-  setInterval(
-    () => discoverProducts().catch(err => log.error("discoverProducts error:", err.message)),
-    DISCOVER_INTERVAL_HRS * 60 * 60 * 1000
-  );
+  setInterval(async () => {
+    try {
+      await discoverProducts();
+    } catch (err) {
+      log.error("discoverProducts error:", err.message);
+      await sendToLogs(getDiscordConfig(), `❌ Discovery error: ${err.message}`);
+    }
+  }, DISCOVER_INTERVAL_HRS * 60 * 60 * 1000);
 })();

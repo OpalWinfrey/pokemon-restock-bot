@@ -37,11 +37,11 @@ function buildPickerMessage(roleIds) {
       {
         type: 1,
         components: [
-          { type: 2, style: 1, label: "🎁 ETB",             custom_id: "role_etb"        },
-          { type: 2, style: 1, label: "📦 Booster Boxes",   custom_id: "role_boosterBox" },
+          { type: 2, style: 2, label: "🎁 ETB",             custom_id: "role_etb"        },
+          { type: 2, style: 2, label: "📦 Booster Boxes",   custom_id: "role_boosterBox" },
           { type: 2, style: 2, label: "🎴 Bundles",         custom_id: "role_bundle"     },
           { type: 2, style: 2, label: "🥫 Tins",            custom_id: "role_tin"        },
-          { type: 2, style: 1, label: "⭐ Premium",          custom_id: "role_premium"    }
+          { type: 2, style: 2, label: "⭐ Premium",          custom_id: "role_premium"    }
         ]
       },
       {
@@ -58,14 +58,13 @@ function buildPickerMessage(roleIds) {
           { type: 2, style: 2, label: "🎯 Target",       custom_id: "retailer_target"    },
           { type: 2, style: 2, label: "🛒 Walmart",      custom_id: "retailer_walmart"   },
           { type: 2, style: 2, label: "🏪 Costco",       custom_id: "retailer_costco"    },
-          { type: 2, style: 2, label: "🎮 GameStop",     custom_id: "retailer_gamestop"  },
-          { type: 2, style: 2, label: "👥 Sam's Club",   custom_id: "retailer_samsclub"  }
+          { type: 2, style: 2, label: "👥 Sam's Club",   custom_id: "retailer_samsclub"  },
+          { type: 2, style: 2, label: "🍎 Meijer",       custom_id: "retailer_meijer"    }
         ]
       },
       {
         type: 1,
         components: [
-          { type: 2, style: 2, label: "🍎 Meijer",       custom_id: "retailer_meijer"    },
           { type: 2, style: 2, label: "💊 Walgreens",    custom_id: "retailer_walgreens" },
           { type: 2, style: 2, label: "💉 CVS",          custom_id: "retailer_cvs"       }
         ]
