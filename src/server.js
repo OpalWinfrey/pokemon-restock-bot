@@ -1,14 +1,14 @@
 /**
- * HTTP server that handles Discord slash command interactions.
- * Required env vars: DISCORD_APP_ID, DISCORD_BOT_TOKEN, DISCORD_PUBLIC_KEY
+ * HTTP server — handles Discord slash commands and button clicks.
  *
  * Slash commands:
- *   /status           — show what the bot is tracking
- *   /setlocation      — set your zip code and search radius
- *   /subscribe        — get pinged when a specific product restocks
- *   /unsubscribe      — stop getting pinged for a product
- *   /subscriptions    — list your current subscriptions
- *   /test             — send a fake restock alert to verify webhook + channel setup
+ *   /setup         — one-time server setup (creates channels, roles, button picker)
+ *   /setlocation   — set your zip + radius so stores near YOU get checked
+ *   /status        — see what the bot is tracking right now
+ *   /test          — send a fake alert to confirm everything is wired up
+ *
+ * Button interactions (in #pick-your-alerts):
+ *   Role toggle buttons — adds or removes an alert role for the user who clicked
  */
 
 import http from "http";
@@ -17,85 +17,60 @@ import axios from "axios";
 import { readFileSync } from "fs";
 import { fileURLToPath } from "url";
 import { dirname, join } from "path";
-import { setUserLocation, addSubscription, removeSubscription, getUsers } from "./users.js";
+import { discord } from "./discord-api.js";
+import { runSetup, setupSummaryMessage } from "./setup.js";
+import { ROLE_NAMES } from "./discord-config.js";
+import { setUserLocation, getUsers } from "./users.js";
 import { log } from "./logger.js";
 
 const __dir = dirname(fileURLToPath(import.meta.url));
 const PRODUCTS_FILE = join(__dir, "../config/products.json");
 
-// Discord Ed25519 signature verification (no external deps — Node 18+ built-in crypto)
-function verifyDiscordSignature(publicKeyHex, signature, timestamp, rawBody) {
+// --- Discord Ed25519 signature verification (Node 18+ built-in crypto) ---
+function verifySignature(publicKeyHex, signature, timestamp, rawBody) {
   try {
     const pubKey = createPublicKey({
       key: Buffer.concat([
-        Buffer.from("302a300506032b6570032100", "hex"), // Ed25519 SPKI prefix
+        Buffer.from("302a300506032b6570032100", "hex"),
         Buffer.from(publicKeyHex, "hex")
       ]),
       format: "der",
       type: "spki"
     });
     return verify(null, Buffer.from(timestamp + rawBody), pubKey, Buffer.from(signature, "hex"));
-  } catch {
+  } catch (err) {
+    log.error("Signature verification error:", err.message);
     return false;
   }
 }
 
-// Register all slash commands with Discord on startup
-export async function registerSlashCommands() {
-  const appId = process.env.DISCORD_APP_ID;
-  const token = process.env.DISCORD_BOT_TOKEN;
-  if (!appId || !token) return;
+// --- Slash command handlers ---
 
-  const commands = [
-    {
-      name: "status",
-      description: "Show what the bot is currently tracking"
-    },
-    {
-      name: "setlocation",
-      description: "Set your zip code so you get alerts for stores near you",
-      options: [
-        { type: 3, name: "zip", description: "Your zip code", required: true },
-        { type: 4, name: "radius", description: "Search radius in miles (default: 20)", required: false }
-      ]
-    },
-    {
-      name: "subscribe",
-      description: "Get pinged when a specific product restocks",
-      options: [
-        { type: 3, name: "product", description: "Product name or keyword (e.g. Prismatic Evolutions, ETB)", required: true }
-      ]
-    },
-    {
-      name: "unsubscribe",
-      description: "Stop getting pinged for a product",
-      options: [
-        { type: 3, name: "product", description: "The keyword you subscribed with", required: true }
-      ]
-    },
-    {
-      name: "subscriptions",
-      description: "List your current product subscriptions"
-    },
-    {
-      name: "test",
-      description: "Send a fake restock alert to verify your webhook and channel setup"
-    }
-  ];
-
+async function handleSetup(guildId) {
+  if (!guildId) return { content: "❌ This command must be run inside a Discord server.", flags: 64 };
   try {
-    await axios.put(
-      `https://discord.com/api/v10/applications/${appId}/commands`,
-      commands,
-      { headers: { Authorization: `Bot ${token}`, "Content-Type": "application/json" } }
-    );
-    log.info("Discord slash commands registered");
+    const { channels, roles } = await runSetup(guildId);
+    return setupSummaryMessage(channels, roles);
   } catch (err) {
-    log.error("Failed to register slash commands:", err.response?.data ?? err.message);
+    log.error("Setup failed:", err.message);
+    return { content: `❌ Setup failed: ${err.message}\n\nMake sure the bot has **Manage Channels** and **Manage Roles** permissions.`, flags: 64 };
   }
 }
 
-// --- Command handlers ---
+function handleSetLocation(userId, username, options) {
+  const zip = options.find(o => o.name === "zip")?.value;
+  const radius = options.find(o => o.name === "radius")?.value ?? 20;
+
+  if (!/^\d{5}$/.test(zip)) {
+    return { content: "❌ Enter a valid 5-digit US zip code (e.g. `60614`).", flags: 64 };
+  }
+
+  setUserLocation(userId, username, zip, Number(radius));
+  return {
+    content: `✅ Got it! The bot will now check stores within **${radius} miles of ${zip}** for you.\n\nIf you haven't already, head to <#pick-your-alerts> and click the buttons for what you want to be notified about.`,
+    flags: 64
+  };
+}
 
 function handleStatus(botStats) {
   const products = JSON.parse(readFileSync(PRODUCTS_FILE, "utf8"));
@@ -105,180 +80,218 @@ function handleStatus(botStats) {
     ? `<t:${Math.floor(botStats.lastCheckTime / 1000)}:R>`
     : "not yet";
 
-  const retailerBreakdown = Object.entries(botStats.nearbyStores ?? {})
-    .filter(([, stores]) => stores.length > 0)
-    .map(([retailer, stores]) => `• **${retailer}**: ${stores.length} store(s)`)
-    .join("\n");
+  const byRetailer = Object.entries(botStats.nearbyStores ?? {})
+    .filter(([, s]) => s.length > 0)
+    .map(([r, s]) => `• **${r}**: ${s.length} store(s)`)
+    .join("\n") || "No stores found yet — check your USER_ZIP env var";
 
   return {
     embeds: [{
-      title: "📊 Pokemon Restock Bot — Status",
+      title: "📊 Bot Status",
       color: 0xffcb05,
       fields: [
-        { name: "Products Tracked", value: String(products.length), inline: true },
-        { name: "Nearby Stores", value: String(storeCount), inline: true },
-        { name: "Users Registered", value: String(users.length), inline: true },
-        { name: "Stores by Retailer", value: retailerBreakdown || "None found yet", inline: false },
-        { name: "Last Check", value: lastCheck, inline: true }
+        { name: "Products Tracked", value: String(products.length), inline: true  },
+        { name: "Nearby Stores",    value: String(storeCount),      inline: true  },
+        { name: "Users Set Up",     value: String(users.length),    inline: true  },
+        { name: "Stores by Retailer", value: byRetailer,            inline: false },
+        { name: "Last Check",       value: lastCheck,               inline: false }
       ],
-      footer: { text: "Pokemon Restock Bot" },
-      timestamp: new Date().toISOString()
+      timestamp: new Date().toISOString(),
+      footer: { text: "Pokemon Restock Bot" }
     }]
   };
 }
 
-function handleSetLocation(userId, username, options) {
-  const zip = options.find(o => o.name === "zip")?.value;
-  const radius = options.find(o => o.name === "radius")?.value ?? 20;
-
-  if (!/^\d{5}$/.test(zip)) {
-    return { content: "❌ Invalid zip code — enter a 5-digit US zip (e.g. `90210`).", flags: 64 };
+async function handleTest(discordConfig) {
+  if (!discordConfig?.channels?.all) {
+    return { content: "❌ Bot isn't fully set up yet — run `/setup` first.", flags: 64 };
   }
 
-  setUserLocation(userId, username, zip, Number(radius));
-  return {
-    content: `✅ Location set to ZIP **${zip}** with a **${radius}-mile** radius. You'll get alerts for stores near you.`,
-    flags: 64 // ephemeral — only visible to the user
-  };
-}
-
-function handleSubscribe(userId, username, options) {
-  const keyword = options.find(o => o.name === "product")?.value ?? "";
-  if (!keyword.trim()) return { content: "❌ Please enter a product keyword.", flags: 64 };
-
-  const added = addSubscription(userId, username, keyword);
-  return {
-    content: added
-      ? `✅ Subscribed! You'll be pinged whenever a product matching **"${keyword}"** restocks.`
-      : `ℹ️ You're already subscribed to **"${keyword}"**.`,
-    flags: 64
-  };
-}
-
-function handleUnsubscribe(userId, username, options) {
-  const keyword = options.find(o => o.name === "product")?.value ?? "";
-  const removed = removeSubscription(userId, keyword);
-  return {
-    content: removed
-      ? `✅ Unsubscribed from **"${keyword}"**.`
-      : `ℹ️ You don't have a subscription for **"${keyword}"**.`,
-    flags: 64
-  };
-}
-
-async function handleTest() {
-  const webhookUrl = process.env.DISCORD_WEBHOOK_URL;
-  if (!webhookUrl) return { content: "❌ `DISCORD_WEBHOOK_URL` is not set in your environment.", flags: 64 };
-
   try {
-    await axios.post(webhookUrl, {
+    await discord.sendMessage(discordConfig.channels.all, {
       embeds: [{
-        title: "🧪 TEST ALERT — Pokemon Restock Bot",
+        title: "🧪 Test Alert — Pokemon Restock Bot",
         color: 0x00cc88,
-        description: "This is a test alert. If you can see this, your webhook and channel are set up correctly!",
+        description: "If you can see this, alerts are working correctly!",
         fields: [
           { name: "Product",  value: "Pokemon Prismatic Evolutions ETB (TEST)", inline: false },
           { name: "Retailer", value: "Target",                                  inline: true  },
-          { name: "Store",    value: "Test Store — 123 Main St",                inline: true  },
-          { name: "Price",    value: "$49.99 (MSRP ✅)",                         inline: true  }
+          { name: "Store",    value: "Test Store — 123 Main St, Chicago, IL",   inline: true  },
+          { name: "Price",    value: "$49.99 ✅ MSRP",                           inline: true  }
         ],
         timestamp: new Date().toISOString(),
         footer: { text: "Pokemon Restock Bot — Test Mode" }
       }]
     });
-    return { content: "✅ Test alert sent! Check your restock channel.", flags: 64 };
+    return { content: `✅ Test alert sent to <#${discordConfig.channels.all}>!`, flags: 64 };
   } catch (err) {
-    return { content: `❌ Failed to send test alert: ${err.message}`, flags: 64 };
+    return { content: `❌ Couldn't send test alert: ${err.message}`, flags: 64 };
   }
 }
 
-function handleSubscriptions(userId) {
-  const users = getUsers();
-  const user = users.find(u => u.discordUserId === userId);
-  const subs = user?.subscriptions ?? [];
+// --- Button interaction handler ---
+// Toggles an alert role on/off for the user who clicked
 
-  if (subs.length === 0) {
-    return {
-      content: "You have no subscriptions yet. Use `/subscribe <product>` to get pinged for specific products.",
-      flags: 64
-    };
+async function handleButtonClick(guildId, userId, customId) {
+  if (!guildId || !userId) return { content: "Something went wrong.", flags: 64 };
+
+  // "role_removeAll" clears every alert role
+  if (customId === "role_removeAll") {
+    try {
+      const member = await discord.getMember(guildId, userId);
+      const { discord: discordCfg } = await import("./discord-config.js");
+      // We'll load roles fresh to get IDs — simple approach
+      const roles = await discord.getRoles(guildId);
+      const alertRoleNames = Object.values(ROLE_NAMES);
+      const alertRoles = roles.filter(r => alertRoleNames.includes(r.name));
+
+      for (const role of alertRoles) {
+        if (member.roles.includes(role.id)) {
+          await discord.removeRole(guildId, userId, role.id);
+        }
+      }
+      return { content: "🔕 Removed all your alert roles.", flags: 64 };
+    } catch (err) {
+      log.error("Failed to remove all roles:", err.message);
+      return { content: "❌ Something went wrong removing your roles.", flags: 64 };
+    }
   }
 
-  return {
-    content: `**Your subscriptions:**\n${subs.map(s => `• ${s}`).join("\n")}\n\nUse \`/unsubscribe <keyword>\` to remove one.`,
-    flags: 64
-  };
+  // "role_etb", "role_boosterBox", etc.
+  const categoryKey = customId.replace("role_", "");
+  const roleName = ROLE_NAMES[categoryKey];
+  if (!roleName) return { content: "Unknown role.", flags: 64 };
+
+  try {
+    const [member, allRoles] = await Promise.all([
+      discord.getMember(guildId, userId),
+      discord.getRoles(guildId)
+    ]);
+
+    const role = allRoles.find(r => r.name === roleName);
+    if (!role) return { content: "❌ Role not found — try running `/setup` again.", flags: 64 };
+
+    const hasRole = member.roles.includes(role.id);
+
+    if (hasRole) {
+      await discord.removeRole(guildId, userId, role.id);
+      return { content: `🔕 Removed **${roleName}** — you won't be pinged for those anymore.`, flags: 64 };
+    } else {
+      await discord.addRole(guildId, userId, role.id);
+      return { content: `✅ You now have **${roleName}** — you'll be pinged when those restock!`, flags: 64 };
+    }
+  } catch (err) {
+    log.error(`Failed to toggle role ${roleName}:`, err.message);
+    return { content: "❌ Couldn't update your role. Make sure the bot has **Manage Roles** permission.", flags: 64 };
+  }
+}
+
+// --- Slash command registration ---
+
+export async function registerSlashCommands() {
+  const appId = process.env.DISCORD_APP_ID;
+  const token = process.env.DISCORD_BOT_TOKEN;
+  if (!appId || !token) return;
+
+  const commands = [
+    {
+      name: "setup",
+      description: "One-time setup — creates channels, roles, and the alert picker. Run this first."
+    },
+    {
+      name: "setlocation",
+      description: "Set your zip code so the bot checks stores near you",
+      options: [
+        { type: 3, name: "zip",    description: "Your 5-digit zip code",              required: true  },
+        { type: 4, name: "radius", description: "Search radius in miles (default 20)", required: false }
+      ]
+    },
+    {
+      name: "status",
+      description: "See what the bot is currently tracking"
+    },
+    {
+      name: "test",
+      description: "Send a fake restock alert to confirm everything is working"
+    }
+  ];
+
+  try {
+    await axios.put(
+      `https://discord.com/api/v10/applications/${appId}/commands`,
+      commands,
+      { headers: { Authorization: `Bot ${token}`, "Content-Type": "application/json" } }
+    );
+    log.info("Slash commands registered: /setup /setlocation /status /test");
+  } catch (err) {
+    log.error("Failed to register slash commands:", err.response?.data ?? err.message);
+  }
 }
 
 // --- HTTP server ---
 
-export function startServer(botStats) {
+export function startServer(botStats, discordConfig) {
   const publicKey = process.env.DISCORD_PUBLIC_KEY;
   const port = process.env.PORT ?? 3000;
 
   if (!publicKey) {
-    console.warn("⚠️  DISCORD_PUBLIC_KEY not set — slash command server not started.");
+    log.warn("DISCORD_PUBLIC_KEY not set — slash command server not started");
     return;
   }
 
-  const server = http.createServer((req, res) => {
+  http.createServer((req, res) => {
     if (req.method !== "POST" || req.url !== "/interactions") {
-      res.writeHead(404);
-      res.end();
-      return;
+      res.writeHead(404); res.end(); return;
     }
 
     let rawBody = "";
     req.on("data", chunk => { rawBody += chunk; });
-    req.on("end", () => {
-      const signature = req.headers["x-signature-ed25519"];
-      const timestamp = req.headers["x-signature-timestamp"];
+    req.on("end", async () => {
+      const sig = req.headers["x-signature-ed25519"];
+      const ts  = req.headers["x-signature-timestamp"];
 
-      if (!verifyDiscordSignature(publicKey, signature, timestamp, rawBody)) {
-        res.writeHead(401);
-        res.end("Invalid signature");
-        return;
+      if (!verifySignature(publicKey, sig, ts, rawBody)) {
+        res.writeHead(401); res.end("Invalid signature"); return;
       }
 
       const body = JSON.parse(rawBody);
       res.setHeader("Content-Type", "application/json");
 
-      // Discord PING handshake
+      // Discord PING
       if (body.type === 1) {
-        res.writeHead(200);
-        res.end(JSON.stringify({ type: 1 }));
-        return;
+        res.writeHead(200); res.end(JSON.stringify({ type: 1 })); return;
       }
+
+      const guildId  = body.guild_id;
+      const userId   = body.member?.user?.id ?? body.user?.id;
+      const username = body.member?.user?.username ?? body.user?.username;
+      let responseData;
 
       // Slash command
       if (body.type === 2) {
         const { name, options = [] } = body.data;
-        const userId = body.member?.user?.id ?? body.user?.id;
-        const username = body.member?.user?.username ?? body.user?.username;
-
-        let responseData;
         switch (name) {
-          case "status":        responseData = handleStatus(botStats); break;
-          case "setlocation":   responseData = handleSetLocation(userId, username, options); break;
-          case "subscribe":     responseData = handleSubscribe(userId, username, options); break;
-          case "unsubscribe":   responseData = handleUnsubscribe(userId, username, options); break;
-          case "subscriptions": responseData = handleSubscriptions(userId); break;
-          case "test":          responseData = await handleTest(); break;
-          default:
-            responseData = { content: "Unknown command.", flags: 64 };
+          case "setup":       responseData = await handleSetup(guildId); break;
+          case "setlocation": responseData = handleSetLocation(userId, username, options); break;
+          case "status":      responseData = handleStatus(botStats); break;
+          case "test":        responseData = await handleTest(discordConfig); break;
+          default:            responseData = { content: "Unknown command.", flags: 64 };
         }
-
         res.writeHead(200);
         res.end(JSON.stringify({ type: 4, data: responseData }));
         return;
       }
 
-      res.writeHead(400);
-      res.end();
-    });
-  });
+      // Button click
+      if (body.type === 3) {
+        const customId = body.data.custom_id;
+        responseData = await handleButtonClick(guildId, userId, customId);
+        res.writeHead(200);
+        res.end(JSON.stringify({ type: 4, data: responseData }));
+        return;
+      }
 
-  server.listen(port, () => {
-    console.log(`🌐 Slash command server listening on port ${port}`);
-  });
+      res.writeHead(400); res.end();
+    });
+  }).listen(port, () => log.info(`Slash command server listening on port ${port}`));
 }

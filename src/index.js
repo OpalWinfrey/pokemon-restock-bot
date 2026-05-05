@@ -5,6 +5,7 @@ import { fileURLToPath } from "url";
 import { dirname, join } from "path";
 import { validateEnv } from "./validate.js";
 import { log } from "./logger.js";
+import { loadDiscordConfig } from "./discord-config.js";
 import { getStoresNearZip } from "./stores.js";
 import { discoverProducts } from "./discover.js";
 import { getUsers } from "./users.js";
@@ -17,7 +18,7 @@ import { checkSamsClub }  from "./checkers/samsclub.js";
 import { checkMeijer }    from "./checkers/meijer.js";
 import { checkWalgreens } from "./checkers/walgreens.js";
 import { checkCVS }       from "./checkers/cvs.js";
-import { sendRestockAlert } from "./discord.js";
+import { sendRestockAlert, sendToLogs } from "./discord.js";
 import { startServer, registerSlashCommands } from "./server.js";
 
 validateEnv();
@@ -38,18 +39,18 @@ function stateKey(productName, retailer, storeId) {
 }
 
 const CHECKERS = {
-  target:    (cfg, storeId) => checkTarget({ tcin: cfg.tcin, storeId }),
-  walmart:   (cfg, storeId) => checkWalmart({ itemId: cfg.itemId, storeId }),
-  bestbuy:   (cfg, storeId) => checkBestBuy({ sku: cfg.sku, storeId }),
-  costco:    (cfg, storeId) => checkCostco({ itemNumber: cfg.itemNumber, warehouseId: storeId }),
-  gamestop:  (cfg, storeId) => checkGameStop({ productId: cfg.productId, storeId }),
-  samsclub:  (cfg, storeId) => checkSamsClub({ itemId: cfg.itemId, clubId: storeId }),
-  meijer:    (cfg, storeId) => checkMeijer({ itemId: cfg.itemId, storeId }),
-  walgreens: (cfg, storeId) => checkWalgreens({ sku: cfg.sku, storeNum: storeId }),
-  cvs:       (cfg, storeId) => checkCVS({ upc: cfg.upc, storeId })
+  target:    (cfg, id) => checkTarget({ tcin: cfg.tcin, storeId: id }),
+  walmart:   (cfg, id) => checkWalmart({ itemId: cfg.itemId, storeId: id }),
+  bestbuy:   (cfg, id) => checkBestBuy({ sku: cfg.sku, storeId: id }),
+  costco:    (cfg, id) => checkCostco({ itemNumber: cfg.itemNumber, warehouseId: id }),
+  gamestop:  (cfg, id) => checkGameStop({ productId: cfg.productId, storeId: id }),
+  samsclub:  (cfg, id) => checkSamsClub({ itemId: cfg.itemId, clubId: id }),
+  meijer:    (cfg, id) => checkMeijer({ itemId: cfg.itemId, storeId: id }),
+  walgreens: (cfg, id) => checkWalgreens({ sku: cfg.sku, storeNum: id }),
+  cvs:       (cfg, id) => checkCVS({ upc: cfg.upc, storeId: id })
 };
 
-const DISPLAY_NAMES = {
+const DISPLAY = {
   target: "Target", walmart: "Walmart", bestbuy: "Best Buy", costco: "Costco",
   gamestop: "GameStop", samsclub: "Sam's Club", meijer: "Meijer",
   walgreens: "Walgreens", cvs: "CVS"
@@ -57,38 +58,33 @@ const DISPLAY_NAMES = {
 
 async function buildStoreMap() {
   const map = await getStoresNearZip(USER_ZIP, SEARCH_RADIUS_MILES);
-
   for (const user of getUsers()) {
     if (!user.zip) continue;
     const userStores = await getStoresNearZip(user.zip, user.radiusMiles ?? SEARCH_RADIUS_MILES);
     for (const [retailer, stores] of Object.entries(userStores)) {
-      const existing = map[retailer] ?? [];
-      const existingIds = new Set(existing.map(s => s.id));
-      map[retailer] = [...existing, ...stores.filter(s => !existingIds.has(s.id))];
+      const existing = new Set((map[retailer] ?? []).map(s => s.id));
+      map[retailer] = [...(map[retailer] ?? []), ...stores.filter(s => !existing.has(s.id))];
     }
   }
-
   return map;
 }
 
-async function checkAll(storeMap) {
+async function checkAll(storeMap, discordConfig) {
   log.info(`Checking stock... [${new Date().toLocaleTimeString()}]`);
   const products = JSON.parse(readFileSync(PRODUCTS_FILE, "utf8"));
+  let restocksFound = 0;
 
   for (const product of products) {
     const { name, retailers, imageUrl = null, msrp = null } = product;
 
     for (const [retailerKey, cfg] of Object.entries(retailers)) {
       const stores = storeMap[retailerKey] ?? [];
-      if (stores.length === 0) continue;
+      if (!stores.length) continue;
 
       const checker = CHECKERS[retailerKey];
-      if (!checker) {
-        log.warn(`No checker implemented for retailer "${retailerKey}" — skipping`);
-        continue;
-      }
+      if (!checker) { log.warn(`No checker for "${retailerKey}" — skipping`); continue; }
 
-      const displayName = DISPLAY_NAMES[retailerKey] ?? retailerKey;
+      const displayName = DISPLAY[retailerKey] ?? retailerKey;
 
       for (const store of stores) {
         try {
@@ -98,48 +94,51 @@ async function checkAll(storeMap) {
 
           if (inStock && !wasInStock) {
             log.info(`RESTOCK: ${name} at ${displayName} — ${store.name}`);
+            restocksFound++;
             await sendRestockAlert({
               productName: name, retailer: displayName,
               storeName: store.name, storeAddress: store.address, storeId: store.id,
-              url: cfg.url, price, imageUrl, msrp
+              url: cfg.url, price, imageUrl, msrp, discordConfig
             });
-          } else if (!inStock) {
-            log.debug(`Out of stock: ${name} at ${displayName} — ${store.name}`);
           } else {
-            log.debug(`Still in stock: ${name} at ${displayName} — ${store.name} (no alert)`);
+            log.debug(`${inStock ? "In stock (no change)" : "Out of stock"}: ${name} at ${displayName} — ${store.name}`);
           }
 
           previousState[key] = inStock;
         } catch (err) {
-          // Isolated: one failed check never kills the rest of the loop
-          log.error(`Unhandled error checking ${name} at ${displayName} store ${store.id}:`, err.message);
+          log.error(`Check failed: ${name} at ${displayName} store ${store.id}:`, err.message);
         }
       }
     }
   }
 
   botStats.lastCheckTime = Date.now();
+  if (restocksFound > 0) {
+    await sendToLogs(discordConfig, `✅ Check complete — ${restocksFound} restock(s) found`);
+  }
 }
 
 // --- Startup ---
 
 log.info("🚀 Pokemon Restock Bot starting...");
-log.info(`📍 Default ZIP: ${USER_ZIP}  |  Radius: ${SEARCH_RADIUS_MILES} miles`);
-log.info(`⏱  Polling every ${POLL_INTERVAL}s  |  Re-discovering every ${DISCOVER_INTERVAL_HRS}h`);
+log.info(`📍 ZIP: ${USER_ZIP} | Radius: ${SEARCH_RADIUS_MILES}mi | Poll: ${POLL_INTERVAL}s | Rediscover: every ${DISCOVER_INTERVAL_HRS}h`);
 
 await registerSlashCommands();
+
+const discordConfig = await loadDiscordConfig();
+
 await discoverProducts();
 
 const storeMap = await buildStoreMap();
 botStats.nearbyStores = storeMap;
 
-const totalStores = Object.values(storeMap).flat().length;
 const products = JSON.parse(readFileSync(PRODUCTS_FILE, "utf8"));
-log.info(`📦 Tracking ${products.length} product(s) across ${totalStores} nearby stores`);
+const totalStores = Object.values(storeMap).flat().length;
+log.info(`📦 Tracking ${products.length} product(s) across ${totalStores} store(s)`);
 
-startServer(botStats);
+startServer(botStats, discordConfig);
 
-await checkAll(storeMap);
+await checkAll(storeMap, discordConfig);
 
-cron.schedule(`*/${POLL_INTERVAL} * * * * *`, () => checkAll(storeMap));
+cron.schedule(`*/${POLL_INTERVAL} * * * * *`, () => checkAll(storeMap, discordConfig));
 setInterval(discoverProducts, DISCOVER_INTERVAL_HRS * 60 * 60 * 1000);
