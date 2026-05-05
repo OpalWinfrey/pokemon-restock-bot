@@ -12,7 +12,8 @@ export const CHANNEL_NAMES = {
   hot:  "hot-restocks",
   all:  "all-restocks",
   logs: "bot-logs",
-  pick: "pick-your-alerts"
+  pick: "pick-your-alerts",
+  help: "bot-commands"
 };
 
 export const ROLE_NAMES = {

@@ -20,7 +20,7 @@ import { dirname, join } from "path";
 import { discord } from "./discord-api.js";
 import { runSetup, setupSummaryMessage } from "./setup.js";
 import { ROLE_NAMES, loadDiscordConfig } from "./discord-config.js";
-import { setUserLocation, getUsers } from "./users.js";
+import { setUserLocation, getUsers, toggleRetailerPref } from "./users.js";
 import { discoverProducts } from "./discover.js";
 import { log } from "./logger.js";
 
@@ -58,6 +58,9 @@ async function handleSetup(guildId) {
     const { channels, roles } = await runSetup(guildId);
     // Reload config so /test and alerts work immediately without a restart
     _discordConfig = await loadDiscordConfig();
+    // Kick off first product scan in background
+    discoverProducts()
+      .catch(err => log.error("Auto-discover after /setup failed:", err.message));
     return setupSummaryMessage(channels, roles);
   } catch (err) {
     log.error("Setup failed:", err.message);
@@ -164,8 +167,7 @@ function handleProducts() {
   if (current) chunks.push(current);
 
   return {
-    content: `**Tracking ${existing.length} product(s):**\n\n${chunks[0]}${chunks.length > 1 ? `\n\n_...and ${existing.length - chunks[0].split("\n").length} more_` : ""}`,
-    flags: 64
+    content: `**Tracking ${existing.length} product(s):**\n\n${chunks[0]}${chunks.length > 1 ? `\n\n_...and ${existing.length - chunks[0].split("\n").length} more_` : ""}`
   };
 }
 
@@ -206,6 +208,26 @@ async function handleButtonClick(guildId, userId, customId) {
     } catch (err) {
       log.error("Failed to remove all roles:", err.message);
       return { content: "❌ Something went wrong removing your roles.", flags: 64 };
+    }
+  }
+
+  // "retailer_target", "retailer_walmart", etc.
+  if (customId.startsWith("retailer_")) {
+    const retailerKey = customId.replace("retailer_", "");
+    const RETAILER_LABELS = {
+      target: "Target", walmart: "Walmart", costco: "Costco",
+      gamestop: "GameStop", samsclub: "Sam's Club",
+      meijer: "Meijer", walgreens: "Walgreens", cvs: "CVS"
+    };
+    const label = RETAILER_LABELS[retailerKey] ?? retailerKey;
+    try {
+      const nowEnabled = toggleRetailerPref(userId, username, retailerKey);
+      return nowEnabled
+        ? { content: `✅ **${label}** alerts turned ON — you'll be pinged for restocks there.`, flags: 64 }
+        : { content: `🔕 **${label}** alerts turned OFF — you won't be pinged for that store anymore.`, flags: 64 };
+    } catch (err) {
+      log.error(`Failed to toggle retailer ${retailerKey}:`, err.message);
+      return { content: "❌ Something went wrong updating your retailer preference.", flags: 64 };
     }
   }
 

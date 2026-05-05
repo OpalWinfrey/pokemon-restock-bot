@@ -26,10 +26,13 @@ function buildPickerMessage(roleIds) {
   return {
     content: [
       "## 🎴 Pokemon Restock Alerts",
-      "**Click a button to get pinged when that type of product restocks.**",
-      "Click it again to remove the alert. You can pick as many as you want.",
       "",
-      "New sets are detected automatically — you don't need to do anything when a new set drops."
+      "**STEP 1 — What types do you want?** Click to toggle (click again to remove)",
+      "ETB = Elite Trainer Box | Premium = special/ultra collections | Bundles = booster bundles",
+      "",
+      "**STEP 2 — Which stores?** All stores are ON by default. Click to turn one off.",
+      "",
+      "_New Pokemon sets are found automatically — nothing to update when a new set drops._"
     ].join("\n"),
     components: [
       {
@@ -49,8 +52,73 @@ function buildPickerMessage(roleIds) {
           { type: 2, style: 2, label: "🃏 Singles & Packs", custom_id: "role_singles"    },
           { type: 2, style: 4, label: "🔕 Remove All",      custom_id: "role_removeAll"  }
         ]
+      },
+      {
+        type: 1,
+        components: [
+          { type: 2, style: 2, label: "🎯 Target",       custom_id: "retailer_target"    },
+          { type: 2, style: 2, label: "🛒 Walmart",      custom_id: "retailer_walmart"   },
+          { type: 2, style: 2, label: "🏪 Costco",       custom_id: "retailer_costco"    },
+          { type: 2, style: 2, label: "🎮 GameStop",     custom_id: "retailer_gamestop"  },
+          { type: 2, style: 2, label: "👥 Sam's Club",   custom_id: "retailer_samsclub"  }
+        ]
+      },
+      {
+        type: 1,
+        components: [
+          { type: 2, style: 2, label: "🍎 Meijer",       custom_id: "retailer_meijer"    },
+          { type: 2, style: 2, label: "💊 Walgreens",    custom_id: "retailer_walgreens" },
+          { type: 2, style: 2, label: "💉 CVS",          custom_id: "retailer_cvs"       }
+        ]
       }
     ]
+  };
+}
+
+function buildHelpMessage() {
+  return {
+    embeds: [{
+      title: "🤖 Pokemon Restock Bot — Commands",
+      color: 0xffcb05,
+      description: "The bot automatically monitors Target, Walmart, Costco, GameStop, Sam's Club, Meijer, Walgreens, and CVS for Pokemon card restocks.",
+      fields: [
+        {
+          name: "📍 Set Your Location",
+          value: "`/setlocation [zip]`\nExample: `/setlocation 60614`\nThe bot will check stores within 25 miles of your zip code.",
+          inline: false
+        },
+        {
+          name: "🔔 Pick Your Alerts",
+          value: `Head to <#pick-your-alerts> and click the buttons for the product types you want to be pinged about. Click again to turn off.`,
+          inline: false
+        },
+        {
+          name: "📦 See Tracked Products",
+          value: "`/products`\nShows every Pokemon product the bot is currently monitoring across all retailers.",
+          inline: false
+        },
+        {
+          name: "📊 Bot Status",
+          value: "`/status`\nShows how many products and stores are being monitored, and when the last check ran.",
+          inline: false
+        },
+        {
+          name: "🔍 Force Product Scan",
+          value: "`/discover`\nManually triggers a fresh scan for new Pokemon products. Normally runs automatically every 12 hours.",
+          inline: false
+        },
+        {
+          name: "📺 Channels",
+          value: [
+            "🔥 **#hot-restocks** — ETBs, booster boxes, premium collections",
+            "📋 **#all-restocks** — everything else",
+            "🎛️ **#pick-your-alerts** — choose what you want to be pinged for"
+          ].join("\n"),
+          inline: false
+        }
+      ],
+      footer: { text: "New sets are detected automatically — no setup needed when new Pokemon sets drop." }
+    }]
   };
 }
 
@@ -79,6 +147,9 @@ export async function runSetup(guildId) {
   // Post (or re-post) the role picker in #pick-your-alerts
   await discord.sendMessage(channels.pick, buildPickerMessage(roles));
 
+  // Post help message in #bot-commands
+  await discord.sendMessage(channels.help, buildHelpMessage());
+
   log.info("Setup complete");
   return { channels, roles };
 }
@@ -89,13 +160,15 @@ export function setupSummaryMessage(channels, roles) {
     "**Channels:**",
     `• <#${channels.hot}> — ETBs, booster boxes, premium collections`,
     `• <#${channels.all}> — everything else`,
-    `• <#${channels.logs}> — bot errors and warnings (keep this private)`,
-    `• <#${channels.pick}> — where people click to pick their alerts\n`,
+    `• <#${channels.pick}> — where people click to pick their alerts`,
+    `• <#${channels.help}> — bot commands and instructions`,
+    `• <#${channels.logs}> — bot errors and warnings (keep this private)\n`,
     "**Roles:** all-restocks, etb-hunter, booster-box-hunter, bundle-hunter, tin-hunter, premium-hunter, singles-hunter\n",
     "**Next steps:**",
-    "1. Tell your friends to go to <#" + channels.pick + "> and click the buttons for what they want",
-    "2. Everyone runs `/setlocation <zip> <radius>` so the bot checks stores near them",
-    "3. That's it — the bot handles everything else automatically"
+    `1. Send your friends to <#${channels.help}> — everything they need is there`,
+    `2. Everyone goes to <#${channels.pick}> and clicks what they want`,
+    "3. Everyone runs `/setlocation <zip>` to get alerts for their area",
+    "4. Run `/discover` to kick off the first product scan"
   ];
   return { content: lines.join("\n"), flags: 64 };
 }

@@ -32,7 +32,7 @@ const DISCOVER_INTERVAL_HRS = parseFloat(process.env.DISCOVER_INTERVAL_HOURS || 
 
 export const botStats = { nearbyStores: {}, lastCheckTime: null };
 
-const previousState = {};
+const stockCounts = {}; // key → consecutive in-stock check count
 function stateKey(productName, retailer, storeId) {
   return `${productName}__${retailer}__${storeId}`;
 }
@@ -88,21 +88,25 @@ async function checkAll(storeMap, discordConfig) {
         try {
           const { inStock, price } = await checker(cfg, store.id);
           const key = stateKey(name, retailerKey, store.id);
-          const wasInStock = previousState[key] ?? false;
 
-          if (inStock && !wasInStock) {
-            log.info(`RESTOCK: ${name} at ${displayName} — ${store.name}`);
-            restocksFound++;
-            await sendRestockAlert({
-              productName: name, retailer: displayName,
-              storeName: store.name, storeAddress: store.address, storeId: store.id,
-              url: cfg.url, price, imageUrl, msrp, discordConfig
-            });
+          if (inStock) {
+            stockCounts[key] = (stockCounts[key] ?? 0) + 1;
+            // Confirm in stock on 2 consecutive checks before alerting
+            if (stockCounts[key] === 2) {
+              log.info(`RESTOCK confirmed: ${name} at ${displayName} — ${store.name}`);
+              restocksFound++;
+              await sendRestockAlert({
+                productName: name, retailer: displayName, retailerKey,
+                storeName: store.name, storeAddress: store.address, storeId: store.id,
+                url: cfg.url, price, imageUrl, msrp, discordConfig
+              });
+            } else {
+              log.debug(`In stock (${stockCounts[key]}/2 confirmations): ${name} at ${displayName} — ${store.name}`);
+            }
           } else {
-            log.debug(`${inStock ? "In stock (no change)" : "Out of stock"}: ${name} at ${displayName} — ${store.name}`);
+            stockCounts[key] = 0;
+            log.debug(`Out of stock: ${name} at ${displayName} — ${store.name}`);
           }
-
-          previousState[key] = inStock;
         } catch (err) {
           log.error(`Check failed: ${name} at ${displayName} store ${store.id}:`, err.message);
         }

@@ -6,7 +6,12 @@
       "Bash(git add *)",
       "Bash(git commit -m ' *)",
       "Bash(gh repo *)",
-      "Bash(git push *)"
+      "Bash(git push *)",
+      "Bash(curl -s -o /dev/null -w \"%{http_code}\" -X POST https://pokemon-restock-bot-production.up.railway.app/interactions -H \"Content-Type: application/json\" -d '{\"type\":1}')",
+      "Bash(sed -n '172p' /Users/elindemann/Documents/Projects/pokemon-restock-bot/src/discover.js)",
+      "Bash(sed -n '172,186p' /Users/elindemann/Documents/Projects/pokemon-restock-bot/src/discover.js)",
+      "Bash(python3 -m json.tool)",
+      "Bash(node --input-type=module)"
     ]
   }
 }

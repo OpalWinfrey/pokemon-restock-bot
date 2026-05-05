@@ -1,5 +1,6 @@
 import { discord } from "./discord-api.js";
 import { getProductCategories, isHotProduct } from "./classify.js";
+import { userWantsRetailer } from "./users.js";
 import { log } from "./logger.js";
 
 const lastAlertAt = {};
@@ -25,7 +26,10 @@ function formatPrice(price, msrp) {
   return `$${p} 🔥 $${Math.abs(diff).toFixed(2)} below MSRP ($${m})`;
 }
 
-export async function sendRestockAlert({ productName, retailer, storeName, storeAddress, storeId, url, price, imageUrl, msrp, discordConfig }) {
+export async function sendRestockAlert({
+  productName, retailer, retailerKey, storeName, storeAddress, storeId,
+  url, price, imageUrl, msrp, discordConfig
+}) {
   if (!discordConfig) {
     log.warn("Discord not configured — run /setup first");
     return;
@@ -36,7 +40,6 @@ export async function sendRestockAlert({ productName, retailer, storeName, store
     return;
   }
 
-  // Pick the right channel
   const channelId = isHotProduct(productName) && discordConfig.channels.hot
     ? discordConfig.channels.hot
     : discordConfig.channels.all;
@@ -46,24 +49,36 @@ export async function sendRestockAlert({ productName, retailer, storeName, store
     return;
   }
 
-  // Build role mentions from every category this product matches
+  // Find which members have a relevant category role AND want this retailer
   const categories = getProductCategories(productName);
-  const mentions = [...new Set(
-    categories.map(cat => discordConfig.roles[cat]).filter(Boolean).map(id => `<@&${id}>`)
-  )];
-  const mention = mentions.length > 0 ? mentions.join(" ") : "@everyone";
+  const relevantRoleIds = new Set(
+    categories.map(cat => discordConfig.roles[cat]).filter(Boolean)
+  );
+
+  let mentionStr = "";
+  try {
+    const allMembers = await discord.getMembers(discordConfig.guildId);
+    const toNotify = allMembers.filter(m =>
+      !m.user?.bot &&
+      m.roles.some(r => relevantRoleIds.has(r)) &&
+      userWantsRetailer(m.user.id, retailerKey)
+    );
+    mentionStr = toNotify.map(m => `<@${m.user.id}>`).join(" ");
+  } catch (err) {
+    log.warn("Could not fetch members for mentions:", err.message);
+  }
 
   const storeDisplay = storeAddress ? `${storeName}\n${storeAddress}` : storeName;
+  const channelMention = isHotProduct(productName) ? discordConfig.channels.hot : discordConfig.channels.all;
 
   const embed = {
     title: "🚨 POKEMON RESTOCK ALERT",
     color: 0xffcb05,
     fields: [
-      { name: "Product",    value: productName,              inline: false },
-      { name: "Retailer",   value: retailer,                 inline: true  },
-      { name: "Store",      value: storeDisplay,             inline: true  },
-      { name: "Price",      value: formatPrice(price, msrp), inline: true  },
-      { name: "🛒 Buy Now", value: `[Click here](${url})`,   inline: false }
+      { name: "Product",  value: productName,              inline: false },
+      { name: "Retailer", value: retailer,                 inline: true  },
+      { name: "Store",    value: storeDisplay,             inline: true  },
+      { name: "Price",    value: formatPrice(price, msrp), inline: true  }
     ],
     timestamp: new Date().toISOString(),
     footer: { text: "Pokemon Restock Bot" }
@@ -71,10 +86,19 @@ export async function sendRestockAlert({ productName, retailer, storeName, store
 
   if (imageUrl) embed.thumbnail = { url: imageUrl };
 
+  const content = [
+    mentionStr,
+    `👀 **${productName}** is back in stock at **${retailer}**!`
+  ].filter(Boolean).join(" ");
+
   try {
     await discord.sendMessage(channelId, {
-      content: `${mention} 👀 **${productName}** is back in stock!`,
-      embeds: [embed]
+      content,
+      embeds: [embed],
+      components: url ? [{
+        type: 1,
+        components: [{ type: 2, style: 5, label: "🛒 Buy Now", url }]
+      }] : []
     });
     lastAlertAt[cooldownKey(productName, retailer, storeId)] = Date.now();
     log.info(`Alert sent: ${productName} at ${storeName}`);
