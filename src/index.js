@@ -37,8 +37,9 @@ function stateKey(productName, retailer, storeId) {
   return `${productName}__${retailer}__${storeId}`;
 }
 
+// Target in-store API (redsky) returns 403 from datacenter IPs — removed.
+// Target online availability uses HTML scraping via ONLINE_ONLY_CHECKERS instead.
 const CHECKERS = {
-  target:    (cfg, id) => checkTarget({ tcin: cfg.tcin, storeId: id }),
   walmart:   (cfg, id) => checkWalmart({ itemId: cfg.itemId, storeId: id }),
   costco:    (cfg, id) => checkCostco({ itemNumber: cfg.itemNumber, warehouseId: id }),
   samsclub:  (cfg, id) => checkSamsClub({ itemId: cfg.itemId, clubId: id }),

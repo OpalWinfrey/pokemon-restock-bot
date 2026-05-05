@@ -1,50 +1,52 @@
 import axios from "axios";
 import { log } from "../logger.js";
-import { apiHeaders } from "../http.js";
+import { browserHeaders } from "../http.js";
 
-// Checks Target.com online availability. storeId is optional — if provided,
-// also checks in-store/order-pickup status. Without it, checks ship-to-address only.
-export async function checkTarget({ tcin, storeId = null }) {
+// Checks Target.com online availability by scraping the product page HTML.
+// The redsky JSON API (pdp_client_v1) returns 403 from datacenter IPs — scraping
+// the product page is more resilient since it's what real browsers do.
+export async function checkTarget({ tcin }) {
   try {
-    const params = {
-      tcin, visitor_id: "anonymous", channel: "WEB", page: `/p/A-${tcin}`
-    };
-    if (storeId) {
-      params.store_id = storeId;
-      params.pricing_store_id = storeId;
-      params.has_store_id = true;
-    }
+    const { data: html } = await axios.get(`https://www.target.com/p/A-${tcin}`, {
+      headers: browserHeaders({ Referer: "https://www.target.com/c/trading-card-games/-/N-55l0h" }),
+      timeout: 15000
+    });
 
-    const { data } = await axios.get(
-      "https://redsky.target.com/redsky_aggregations/v1/web/pdp_client_v1",
-      { params, headers: apiHeaders({ Referer: "https://www.target.com/" }), timeout: 10000 }
-    );
-
-    const product = data?.data?.product;
-    if (!product) {
-      log.warn(`Target: no product data for TCIN ${tcin}`);
+    const match = html.match(/<script id="__NEXT_DATA__" type="application\/json">([\s\S]*?)<\/script>/);
+    if (!match) {
+      log.warn(`Target: no __NEXT_DATA__ for TCIN ${tcin}`);
       return { inStock: false, price: null };
     }
 
-    const fulfillment = product.fulfillment;
-    const price = product.price?.current_retail ?? null;
+    const pageData = JSON.parse(match[1]);
 
-    // In-store / order pickup (only if we have a store ID)
-    if (storeId) {
-      const storeOptions = fulfillment?.store_options?.[0];
-      const inStoreStock =
-        storeOptions?.in_store_only?.availability_status === "IN_STOCK" ||
-        storeOptions?.order_pickup?.availability_status === "IN_STOCK";
-      return { inStock: inStoreStock, price, isOnline: false };
+    // Target buries product data deep in pageProps — path varies but product is usually here
+    const pdpState =
+      pageData?.props?.pageProps?.pageData?.product ??
+      pageData?.props?.pageProps?.initialData?.product ??
+      null;
+
+    if (!pdpState) {
+      log.warn(`Target: no product in __NEXT_DATA__ for TCIN ${tcin}`);
+      return { inStock: false, price: null };
     }
 
-    // Online (ship-to-address)
-    const onlineStatus = fulfillment?.shipping_options?.availability_status;
+    const fulfillment = pdpState.fulfillment ?? pdpState.item?.enrichment?.fulfillment ?? {};
+    const price =
+      pdpState.price?.current_retail ??
+      pdpState.item?.price?.current_retail ??
+      null;
+
+    const onlineStatus = fulfillment?.shipping_options?.availability_status ?? "";
     const inStock = onlineStatus === "IN_STOCK";
+
     return { inStock, price, isOnline: true };
   } catch (err) {
-    if (err.response?.status === 429) {
-      log.warn(`Target: rate limited — will retry next cycle`);
+    const status = err.response?.status;
+    if (status === 429) {
+      log.warn(`Target: rate limited for TCIN ${tcin} — will retry next cycle`);
+    } else if (status === 403 || status === 401) {
+      log.warn(`Target: blocked (${status}) for TCIN ${tcin} — datacenter IP detected`);
     } else {
       log.error(`Target check failed for TCIN ${tcin}:`, err.message);
     }
