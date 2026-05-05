@@ -29,6 +29,9 @@ let _discordConfig = null;
 export function getDiscordConfig() { return _discordConfig; }
 export function setDiscordConfig(cfg) { _discordConfig = cfg; }
 
+let _botStats = null;
+let _rebuildStoreMap = null;
+
 const __dir = dirname(fileURLToPath(import.meta.url));
 const PRODUCTS_FILE = join(__dir, "../config/products.json");
 
@@ -77,6 +80,16 @@ function handleSetLocation(userId, username, options) {
   }
 
   setUserLocation(userId, username, zip, radius);
+
+  // Kick off store map rebuild in background so new zip gets added immediately
+  if (_rebuildStoreMap) {
+    _rebuildStoreMap().then(storeMap => {
+      if (_botStats) _botStats.nearbyStores = storeMap;
+      const count = Object.values(storeMap).flat().length;
+      log.info(`Store map rebuilt after /setlocation by ${username}: ${count} total store(s)`);
+    }).catch(err => log.warn("Store map rebuild failed:", err.message));
+  }
+
   return {
     content: `✅ Got it! You'll get alerts for stores within **25 miles of ${zip}**.\n\nIf you haven't already, head to <#pick-your-alerts> and click the buttons for what you want to be notified about.`,
     flags: 64
@@ -392,8 +405,10 @@ export async function registerSlashCommands() {
 
 // --- HTTP server ---
 
-export function startServer(botStats, initialConfig) {
+export function startServer(botStats, initialConfig, rebuildStoreMap) {
   _discordConfig = initialConfig;
+  _botStats = botStats;
+  if (rebuildStoreMap) _rebuildStoreMap = rebuildStoreMap;
   const publicKey = process.env.DISCORD_PUBLIC_KEY;
   const port = process.env.PORT ?? 3000;
 

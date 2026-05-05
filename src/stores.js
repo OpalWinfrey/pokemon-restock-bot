@@ -114,7 +114,15 @@ async function tryFind(retailer, fn) {
     log.info(`  📍 ${retailer}: found ${stores.length} store(s) nearby`);
     return stores;
   } catch (err) {
-    log.warn(`  ${retailer}: store lookup failed — ${err.response?.status ?? err.message}`);
+    const status = err.response?.status;
+    const detail = status ? `HTTP ${status}` : err.message;
+    log.warn(`  ${retailer}: store lookup failed — ${detail}`);
+    if (err.response?.data) {
+      const body = typeof err.response.data === "string"
+        ? err.response.data.slice(0, 200)
+        : JSON.stringify(err.response.data).slice(0, 200);
+      log.warn(`  ${retailer}: response body: ${body}`);
+    }
     return [];
   }
 }

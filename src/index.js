@@ -60,7 +60,7 @@ const ONLINE_ONLY_CHECKERS = {
   pokemoncenter: (cfg) => checkPokemonCenter({ itemId: cfg.itemId, url: cfg.url })
 };
 
-async function buildStoreMap() {
+export async function buildStoreMap() {
   const map = await getStoresNearZip(USER_ZIP, SEARCH_RADIUS_MILES);
   for (const user of getUsers()) {
     if (!user.zip) continue;
@@ -166,7 +166,7 @@ log.info(`📍 ZIP: ${USER_ZIP} | Radius: ${SEARCH_RADIUS_MILES}mi | Poll: ${POL
 // while the slower discovery + store lookup runs in the background.
 await registerSlashCommands();
 const discordConfig = await loadDiscordConfig();
-startServer(botStats, discordConfig);
+startServer(botStats, discordConfig, buildStoreMap);
 
 function storeBreakdown(storeMap) {
   const lines = [];
@@ -195,7 +195,11 @@ function storeBreakdown(storeMap) {
   const { lines: breakdownLines, total: totalStores } = storeBreakdown(storeMap);
 
   if (totalStores === 0) {
-    log.warn("⚠️  No stores found — check that USER_ZIP is set in Railway variables");
+    if (!USER_ZIP) {
+      log.warn("⚠️  No stores found — USER_ZIP is not set in Railway variables");
+    } else {
+      log.warn(`⚠️  No stores found for zip ${USER_ZIP} — retailer store APIs may be blocking Railway's IP. Check logs above for HTTP errors.`);
+    }
   }
   log.info(`📦 Tracking ${products.length} product(s)`);
   log.info(`📍 Stores within ${SEARCH_RADIUS_MILES}mi of ${USER_ZIP ?? "unset"}:`);
