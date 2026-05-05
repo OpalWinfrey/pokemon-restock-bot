@@ -72,11 +72,12 @@ export async function sendRestockAlert({
 
   const isOnlineDrop = storeId === "online";
   const storeDisplay = isOnlineDrop
-    ? `🌐 **Online Only** — [pokemoncenter.com](${url})`
+    ? `🌐 **Online Only** — [${storeName}](${url})`
     : (storeAddress ? `${storeName}\n${storeAddress}` : storeName);
 
+  const onlineTitle = retailerKey === "pokemoncenter" ? "🛒 POKEMON CENTER DROP" : `🛒 ${retailer.toUpperCase()} ONLINE DROP`;
   const embed = {
-    title: isOnlineDrop ? "🛒 POKEMON CENTER ONLINE DROP" : "🚨 POKEMON RESTOCK ALERT",
+    title: isOnlineDrop ? onlineTitle : "🚨 POKEMON RESTOCK ALERT",
     color: 0xffcb05,
     fields: [
       { name: "Product",  value: productName,              inline: false },
