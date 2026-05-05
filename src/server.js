@@ -21,6 +21,7 @@ import { discord } from "./discord-api.js";
 import { runSetup, setupSummaryMessage } from "./setup.js";
 import { ROLE_NAMES, loadDiscordConfig } from "./discord-config.js";
 import { setUserLocation, getUsers } from "./users.js";
+import { discoverProducts } from "./discover.js";
 import { log } from "./logger.js";
 
 // Kept in module scope so /setup can refresh it for subsequent /test calls
@@ -136,6 +137,50 @@ async function handleTest(discordConfig) {
   }
 }
 
+function handleProducts() {
+  let existing = [];
+  try { existing = JSON.parse(readFileSync(PRODUCTS_FILE, "utf8")); } catch { /* empty */ }
+
+  if (!existing.length) {
+    return { content: "No products tracked yet — run `/discover` to kick off the first scan.", flags: 64 };
+  }
+
+  const lines = existing.map(p => {
+    const retailers = Object.keys(p.retailers).join(", ");
+    const msrp = p.msrp ? ` — MSRP $${p.msrp.toFixed(2)}` : "";
+    return `• **${p.name}**${msrp} _(${retailers})_`;
+  });
+
+  // Discord has a 2000 char message limit — split into chunks if needed
+  const chunks = [];
+  let current = "";
+  for (const line of lines) {
+    if (current.length + line.length + 1 > 1900) {
+      chunks.push(current);
+      current = "";
+    }
+    current += (current ? "\n" : "") + line;
+  }
+  if (current) chunks.push(current);
+
+  return {
+    content: `**Tracking ${existing.length} product(s):**\n\n${chunks[0]}${chunks.length > 1 ? `\n\n_...and ${existing.length - chunks[0].split("\n").length} more_` : ""}`,
+    flags: 64
+  };
+}
+
+async function handleDiscover() {
+  // Fire off discovery in background and respond immediately
+  discoverProducts()
+    .then(products => log.info(`/discover triggered — found ${products.length} products`))
+    .catch(err => log.error("/discover failed:", err.message));
+
+  return {
+    content: "🔍 Discovery started! This takes 1–2 minutes. Run `/products` afterwards to see what was found.",
+    flags: 64
+  };
+}
+
 // --- Button interaction handler ---
 // Toggles an alert role on/off for the user who clicked
 
@@ -217,6 +262,14 @@ export async function registerSlashCommands() {
       description: "See what the bot is currently tracking"
     },
     {
+      name: "products",
+      description: "List all Pokemon products the bot is currently monitoring"
+    },
+    {
+      name: "discover",
+      description: "Manually trigger a product discovery scan right now"
+    },
+    {
       name: "test",
       description: "Send a fake restock alert to confirm everything is working"
     }
@@ -228,7 +281,7 @@ export async function registerSlashCommands() {
       commands,
       { headers: { Authorization: `Bot ${token}`, "Content-Type": "application/json" } }
     );
-    log.info("Slash commands registered: /setup /setlocation /status /test");
+    log.info("Slash commands registered: /setup /setlocation /status /products /discover /test");
   } catch (err) {
     log.error("Failed to register slash commands:", err.response?.data ?? err.message);
   }
@@ -282,6 +335,8 @@ export function startServer(botStats, initialConfig) {
           case "setlocation": responseData = handleSetLocation(userId, username, options); break;
           case "status":      responseData = handleStatus(botStats); break;
           case "test":        responseData = await handleTest(_discordConfig); break;
+          case "products":    responseData = handleProducts(); break;
+          case "discover":    responseData = await handleDiscover(); break;
           default:            responseData = { content: "Unknown command.", flags: 64 };
         }
         res.writeHead(200);
