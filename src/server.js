@@ -186,7 +186,7 @@ async function handleDiscover() {
 // --- Button interaction handler ---
 // Toggles an alert role on/off for the user who clicked
 
-async function handleButtonClick(guildId, userId, customId) {
+async function handleButtonClick(guildId, userId, username, customId) {
   if (!guildId || !userId) return { content: "Something went wrong.", flags: 64 };
 
   // "role_removeAll" clears every alert role
@@ -369,7 +369,7 @@ export function startServer(botStats, initialConfig) {
       // Button click
       if (body.type === 3) {
         const customId = body.data.custom_id;
-        responseData = await handleButtonClick(guildId, userId, customId);
+        responseData = await handleButtonClick(guildId, userId, username, customId);
         res.writeHead(200);
         res.end(JSON.stringify({ type: 4, data: responseData }));
         return;
