@@ -165,9 +165,9 @@ startServer(botStats, discordConfig, buildStoreMap);
 
 // Background init — runs after server is already accepting requests
 (async () => {
-  // Delay first discovery 5 min so the server is stable before firing search requests
-  log.info("⏳ First product discovery delayed 5 min to avoid startup blocking...");
-  await new Promise(r => setTimeout(r, 5 * 60 * 1000));
+  // Short delay so the server is accepting requests before discovery fires
+  log.info("⏳ Starting product discovery in 30s...");
+  await new Promise(r => setTimeout(r, 30 * 1000));
   await discoverProducts(getDiscordConfig());
 
   const storeMap = buildStoreMap();
