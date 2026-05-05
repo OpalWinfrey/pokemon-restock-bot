@@ -10,10 +10,6 @@ export function validateEnv() {
   if (!process.env.DISCORD_GUILD_ID) {
     warnings.push("DISCORD_GUILD_ID not set — alerts won't be sent until this is set. Right-click your server name → Copy Server ID.");
   }
-  if (!process.env.BESTBUY_API_KEY) {
-    warnings.push("BESTBUY_API_KEY not set — Best Buy will be skipped. Free key at developer.bestbuy.com");
-  }
-
   console.log("\n📋 Startup check:");
   for (const w of warnings) console.warn(`  ⚠️  ${w}`);
   for (const e of errors)   console.error(`  ❌ Missing: ${e}`);

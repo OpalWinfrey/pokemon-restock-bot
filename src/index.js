@@ -11,7 +11,6 @@ import { discoverProducts } from "./discover.js";
 import { getUsers } from "./users.js";
 import { checkTarget }    from "./checkers/target.js";
 import { checkWalmart }   from "./checkers/walmart.js";
-import { checkBestBuy }   from "./checkers/bestbuy.js";
 import { checkCostco }    from "./checkers/costco.js";
 import { checkGameStop }  from "./checkers/gamestop.js";
 import { checkSamsClub }  from "./checkers/samsclub.js";
@@ -41,7 +40,6 @@ function stateKey(productName, retailer, storeId) {
 const CHECKERS = {
   target:    (cfg, id) => checkTarget({ tcin: cfg.tcin, storeId: id }),
   walmart:   (cfg, id) => checkWalmart({ itemId: cfg.itemId, storeId: id }),
-  bestbuy:   (cfg, id) => checkBestBuy({ sku: cfg.sku, storeId: id }),
   costco:    (cfg, id) => checkCostco({ itemNumber: cfg.itemNumber, warehouseId: id }),
   gamestop:  (cfg, id) => checkGameStop({ productId: cfg.productId, storeId: id }),
   samsclub:  (cfg, id) => checkSamsClub({ itemId: cfg.itemId, clubId: id }),
@@ -51,7 +49,7 @@ const CHECKERS = {
 };
 
 const DISPLAY = {
-  target: "Target", walmart: "Walmart", bestbuy: "Best Buy", costco: "Costco",
+  target: "Target", walmart: "Walmart", costco: "Costco",
   gamestop: "GameStop", samsclub: "Sam's Club", meijer: "Meijer",
   walgreens: "Walgreens", cvs: "CVS"
 };
@@ -123,22 +121,25 @@ async function checkAll(storeMap, discordConfig) {
 log.info("🚀 Pokemon Restock Bot starting...");
 log.info(`📍 ZIP: ${USER_ZIP} | Radius: ${SEARCH_RADIUS_MILES}mi | Poll: ${POLL_INTERVAL}s | Rediscover: every ${DISCOVER_INTERVAL_HRS}h`);
 
+// Start the HTTP server immediately so Discord's endpoint verification succeeds
+// while the slower discovery + store lookup runs in the background.
 await registerSlashCommands();
-
 const discordConfig = await loadDiscordConfig();
-
-await discoverProducts();
-
-const storeMap = await buildStoreMap();
-botStats.nearbyStores = storeMap;
-
-const products = JSON.parse(readFileSync(PRODUCTS_FILE, "utf8"));
-const totalStores = Object.values(storeMap).flat().length;
-log.info(`📦 Tracking ${products.length} product(s) across ${totalStores} store(s)`);
-
 startServer(botStats, discordConfig);
 
-await checkAll(storeMap, discordConfig);
+// Background init — runs after server is already accepting requests
+(async () => {
+  await discoverProducts();
 
-cron.schedule(`*/${POLL_INTERVAL} * * * * *`, () => checkAll(storeMap, discordConfig));
-setInterval(discoverProducts, DISCOVER_INTERVAL_HRS * 60 * 60 * 1000);
+  const storeMap = await buildStoreMap();
+  botStats.nearbyStores = storeMap;
+
+  const products = JSON.parse(readFileSync(PRODUCTS_FILE, "utf8"));
+  const totalStores = Object.values(storeMap).flat().length;
+  log.info(`📦 Tracking ${products.length} product(s) across ${totalStores} store(s)`);
+
+  await checkAll(storeMap, discordConfig);
+
+  cron.schedule(`*/${POLL_INTERVAL} * * * * *`, () => checkAll(storeMap, discordConfig));
+  setInterval(discoverProducts, DISCOVER_INTERVAL_HRS * 60 * 60 * 1000);
+})();

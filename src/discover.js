@@ -91,22 +91,6 @@ async function searchWalmart(term) {
   })).filter(p => p.name && isPokemonCard(p.name));
 }
 
-async function searchBestBuy(term) {
-  const apiKey = process.env.BESTBUY_API_KEY;
-  if (!apiKey) return [];
-  const { data } = await axios.get(
-    `https://api.bestbuy.com/v1/products(search=${encodeURIComponent(term)})`,
-    { params: { apiKey, show: "sku,name,salePrice,url,thumbnailImage", format: "json", pageSize: 24 }, timeout: 15000 }
-  );
-  return (data?.products ?? []).map(p => ({
-    name: p.name ?? "",
-    imageUrl: p.thumbnailImage ?? null,
-    price: p.salePrice ?? null,
-    retailer: "bestbuy",
-    cfg: { sku: String(p.sku), url: p.url ?? `https://www.bestbuy.com/site/-/${p.sku}.p` }
-  })).filter(p => p.name && isPokemonCard(p.name));
-}
-
 async function searchGameStop(term) {
   const { data } = await axios.get(
     "https://www.gamestop.com/on/demandware.store/Sites-gamestop-us-Site/en_US/Search-UpdateGrid",
@@ -155,7 +139,6 @@ async function runTerm(term) {
   const results = await Promise.allSettled([
     searchTarget(term),
     searchWalmart(term),
-    searchBestBuy(term),
     searchGameStop(term),
     searchSamsClub(term)
   ]);

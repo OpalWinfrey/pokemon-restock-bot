@@ -35,20 +35,6 @@ async function findWalmartStores(zip, radiusMiles) {
   }));
 }
 
-async function findBestBuyStores(zip, radiusMiles) {
-  const apiKey = process.env.BESTBUY_API_KEY;
-  if (!apiKey) return [];
-  const { data } = await axios.get(
-    `https://api.bestbuy.com/v1/stores(area(${zip},${radiusMiles}))`,
-    { params: { apiKey, show: "storeId,name,city,region,address,distance", format: "json" }, timeout: 10000 }
-  );
-  return (data.stores ?? []).map(s => ({
-    id: String(s.storeId),
-    name: s.name,
-    address: fmt(s.address, s.city, s.region)
-  }));
-}
-
 async function findCostcoWarehouses(zip, radiusMiles) {
   const { data } = await axios.get("https://www.costco.com/AjaxWarehouseBrowseView", {
     params: {
@@ -149,11 +135,10 @@ async function tryFind(retailer, fn) {
 
 export async function getStoresNearZip(zip, radiusMiles) {
   log.info(`\n🗺  Finding stores within ${radiusMiles} miles of ${zip}...`);
-  const [target, walmart, bestbuy, costco, gamestop, samsclub, meijer, walgreens, cvs] =
+  const [target, walmart, costco, gamestop, samsclub, meijer, walgreens, cvs] =
     await Promise.all([
       tryFind("Target",     () => findTargetStores(zip, radiusMiles)),
       tryFind("Walmart",    () => findWalmartStores(zip, radiusMiles)),
-      tryFind("Best Buy",   () => findBestBuyStores(zip, radiusMiles)),
       tryFind("Costco",     () => findCostcoWarehouses(zip, radiusMiles)),
       tryFind("GameStop",   () => findGameStopStores(zip, radiusMiles)),
       tryFind("Sam's Club", () => findSamsClubStores(zip, radiusMiles)),
@@ -161,5 +146,5 @@ export async function getStoresNearZip(zip, radiusMiles) {
       tryFind("Walgreens",  () => findWalgreenStores(zip, radiusMiles)),
       tryFind("CVS",        () => findCVSStores(zip, radiusMiles))
     ]);
-  return { target, walmart, bestbuy, costco, gamestop, samsclub, meijer, walgreens, cvs };
+  return { target, walmart, costco, gamestop, samsclub, meijer, walgreens, cvs };
 }
