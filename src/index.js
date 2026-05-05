@@ -18,7 +18,7 @@ import { checkMeijer }    from "./checkers/meijer.js";
 import { checkWalgreens } from "./checkers/walgreens.js";
 import { checkCVS }       from "./checkers/cvs.js";
 import { sendRestockAlert, sendToLogs } from "./discord.js";
-import { startServer, registerSlashCommands } from "./server.js";
+import { startServer, registerSlashCommands, getDiscordConfig } from "./server.js";
 
 validateEnv();
 
@@ -138,8 +138,8 @@ startServer(botStats, discordConfig);
   const totalStores = Object.values(storeMap).flat().length;
   log.info(`📦 Tracking ${products.length} product(s) across ${totalStores} store(s)`);
 
-  await checkAll(storeMap, discordConfig);
+  await checkAll(storeMap, getDiscordConfig());
 
-  cron.schedule(`*/${POLL_INTERVAL} * * * * *`, () => checkAll(storeMap, discordConfig));
+  cron.schedule(`*/${POLL_INTERVAL} * * * * *`, () => checkAll(storeMap, getDiscordConfig()));
   setInterval(discoverProducts, DISCOVER_INTERVAL_HRS * 60 * 60 * 1000);
 })();

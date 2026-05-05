@@ -19,9 +19,14 @@ import { fileURLToPath } from "url";
 import { dirname, join } from "path";
 import { discord } from "./discord-api.js";
 import { runSetup, setupSummaryMessage } from "./setup.js";
-import { ROLE_NAMES } from "./discord-config.js";
+import { ROLE_NAMES, loadDiscordConfig } from "./discord-config.js";
 import { setUserLocation, getUsers } from "./users.js";
 import { log } from "./logger.js";
+
+// Kept in module scope so /setup can refresh it for subsequent /test calls
+let _discordConfig = null;
+export function getDiscordConfig() { return _discordConfig; }
+export function setDiscordConfig(cfg) { _discordConfig = cfg; }
 
 const __dir = dirname(fileURLToPath(import.meta.url));
 const PRODUCTS_FILE = join(__dir, "../config/products.json");
@@ -50,6 +55,8 @@ async function handleSetup(guildId) {
   if (!guildId) return { content: "❌ This command must be run inside a Discord server.", flags: 64 };
   try {
     const { channels, roles } = await runSetup(guildId);
+    // Reload config so /test and alerts work immediately without a restart
+    _discordConfig = await loadDiscordConfig();
     return setupSummaryMessage(channels, roles);
   } catch (err) {
     log.error("Setup failed:", err.message);
@@ -230,7 +237,8 @@ export async function registerSlashCommands() {
 
 // --- HTTP server ---
 
-export function startServer(botStats, discordConfig) {
+export function startServer(botStats, initialConfig) {
+  _discordConfig = initialConfig;
   const publicKey = process.env.DISCORD_PUBLIC_KEY;
   const port = process.env.PORT ?? 3000;
 
@@ -274,7 +282,7 @@ export function startServer(botStats, discordConfig) {
           case "setup":       responseData = await handleSetup(guildId); break;
           case "setlocation": responseData = handleSetLocation(userId, username, options); break;
           case "status":      responseData = handleStatus(botStats); break;
-          case "test":        responseData = await handleTest(discordConfig); break;
+          case "test":        responseData = await handleTest(_discordConfig); break;
           default:            responseData = { content: "Unknown command.", flags: 64 };
         }
         res.writeHead(200);
