@@ -66,15 +66,15 @@ async function handleSetup(guildId) {
 
 function handleSetLocation(userId, username, options) {
   const zip = options.find(o => o.name === "zip")?.value;
-  const radius = options.find(o => o.name === "radius")?.value ?? 20;
+  const radius = 25;
 
   if (!/^\d{5}$/.test(zip)) {
-    return { content: "❌ Enter a valid 5-digit US zip code (e.g. `60614`).", flags: 64 };
+    return { content: "❌ Enter a valid 5-digit US zip code (e.g. `/setlocation 60614`).", flags: 64 };
   }
 
-  setUserLocation(userId, username, zip, Number(radius));
+  setUserLocation(userId, username, zip, radius);
   return {
-    content: `✅ Got it! The bot will now check stores within **${radius} miles of ${zip}** for you.\n\nIf you haven't already, head to <#pick-your-alerts> and click the buttons for what you want to be notified about.`,
+    content: `✅ Got it! You'll get alerts for stores within **25 miles of ${zip}**.\n\nIf you haven't already, head to <#pick-your-alerts> and click the buttons for what you want to be notified about.`,
     flags: 64
   };
 }
@@ -207,10 +207,9 @@ export async function registerSlashCommands() {
     },
     {
       name: "setlocation",
-      description: "Set your zip code so the bot checks stores near you",
+      description: "Set your zip code to get alerts for stores near you",
       options: [
-        { type: 3, name: "zip",    description: "Your 5-digit zip code",              required: true  },
-        { type: 4, name: "radius", description: "Search radius in miles (default 20)", required: false }
+        { type: 3, name: "zip", description: "Your 5-digit US zip code (e.g. 60614)", required: true }
       ]
     },
     {
