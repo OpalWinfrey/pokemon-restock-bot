@@ -43,7 +43,9 @@ export async function checkTarget({ tcin }) {
     return { inStock, price, isOnline: true };
   } catch (err) {
     const status = err.response?.status;
-    if (status === 429) {
+    if (status === 404) {
+      log.debug(`Target: TCIN ${tcin} not found (discontinued or delisted)`);
+    } else if (status === 429) {
       log.warn(`Target: rate limited for TCIN ${tcin} — will retry next cycle`);
     } else if (status === 403 || status === 401) {
       log.warn(`Target: blocked (${status}) for TCIN ${tcin} — datacenter IP detected`);
