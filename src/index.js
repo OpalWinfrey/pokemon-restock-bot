@@ -6,9 +6,8 @@ import { dirname, join } from "path";
 import { validateEnv } from "./validate.js";
 import { log } from "./logger.js";
 import { loadDiscordConfig } from "./discord-config.js";
-import { getStoresNearZip } from "./stores.js";
+import { buildManualStoreMap } from "./stores.js";
 import { discoverProducts } from "./discover.js";
-import { getUsers } from "./users.js";
 import { checkTarget }         from "./checkers/target.js";
 import { checkWalmart }        from "./checkers/walmart.js";
 import { checkCostco }         from "./checkers/costco.js";
@@ -55,22 +54,19 @@ const DISPLAY = {
   pokemoncenter: "Pokemon Center"
 };
 
-// Retailers that are online-only — checked once per product, not once per store
+// All major retailers checked for online availability — no store loop.
+// Store locator APIs are blocked from cloud IPs, so we check .com stock directly.
+// If a user manually adds a store via /addstore, per-store checks run via CHECKERS.
 const ONLINE_ONLY_CHECKERS = {
+  target:        (cfg) => checkTarget({ tcin: cfg.tcin }),
+  walmart:       (cfg) => checkWalmart({ itemId: cfg.itemId }),
   pokemoncenter: (cfg) => checkPokemonCenter({ itemId: cfg.itemId, url: cfg.url })
 };
 
-export async function buildStoreMap() {
-  const map = await getStoresNearZip(USER_ZIP, SEARCH_RADIUS_MILES);
-  for (const user of getUsers()) {
-    if (!user.zip) continue;
-    const userStores = await getStoresNearZip(user.zip, user.radiusMiles ?? SEARCH_RADIUS_MILES);
-    for (const [retailer, stores] of Object.entries(userStores)) {
-      const existing = new Set((map[retailer] ?? []).map(s => s.id));
-      map[retailer] = [...(map[retailer] ?? []), ...stores.filter(s => !existing.has(s.id))];
-    }
-  }
-  return map;
+export function buildStoreMap() {
+  // No automated store lookup — cloud IPs are blocked by all retailer locator APIs.
+  // Returns manually-added stores (via /addstore) only.
+  return buildManualStoreMap();
 }
 
 async function checkAll(storeMap, discordConfig) {
@@ -85,7 +81,6 @@ async function checkAll(storeMap, discordConfig) {
     for (const [retailerKey, cfg] of Object.entries(retailers)) {
       const displayName = DISPLAY[retailerKey] ?? retailerKey;
 
-      // Online-only retailers (Pokemon Center) — check once per product, no store loop
       if (ONLINE_ONLY_CHECKERS[retailerKey]) {
         try {
           const { inStock, price } = await ONLINE_ONLY_CHECKERS[retailerKey](cfg);
@@ -93,11 +88,13 @@ async function checkAll(storeMap, discordConfig) {
           if (inStock) {
             stockCounts[key] = (stockCounts[key] ?? 0) + 1;
             if (stockCounts[key] === 2) {
-              log.info(`ONLINE DROP confirmed: ${name} at ${displayName}`);
+              log.info(`ONLINE RESTOCK confirmed: ${name} at ${displayName}`);
               restocksFound++;
+              const onlineLabel = { target: "Target.com", walmart: "Walmart.com", pokemoncenter: "Pokemon Center" };
               await sendRestockAlert({
                 productName: name, retailer: displayName, retailerKey,
-                storeName: "Pokemon Center Online", storeAddress: "pokemoncenter.com", storeId: "online",
+                storeName: onlineLabel[retailerKey] ?? `${displayName} Online`,
+                storeAddress: cfg.url, storeId: "online",
                 url: cfg.url, price, imageUrl, msrp, discordConfig
               });
             } else {
@@ -168,19 +165,6 @@ await registerSlashCommands();
 const discordConfig = await loadDiscordConfig();
 startServer(botStats, discordConfig, buildStoreMap);
 
-function storeBreakdown(storeMap) {
-  const lines = [];
-  let total = 0;
-  const empty = [];
-  for (const [key, stores] of Object.entries(storeMap)) {
-    const label = DISPLAY[key] ?? key;
-    if (stores.length) { lines.push(`  • ${label}: ${stores.length} store(s)`); total += stores.length; }
-    else empty.push(label);
-  }
-  if (empty.length) lines.push(`  • (0 stores found for: ${empty.join(", ")})`);
-  return { lines, total };
-}
-
 // Background init — runs after server is already accepting requests
 (async () => {
   // Delay first discovery 5 min so the server is stable before firing search requests
@@ -188,30 +172,21 @@ function storeBreakdown(storeMap) {
   await new Promise(r => setTimeout(r, 5 * 60 * 1000));
   await discoverProducts(getDiscordConfig());
 
-  const storeMap = await buildStoreMap();
+  const storeMap = buildStoreMap();
   botStats.nearbyStores = storeMap;
 
   const products = JSON.parse(readFileSync(PRODUCTS_FILE, "utf8"));
-  const { lines: breakdownLines, total: totalStores } = storeBreakdown(storeMap);
+  const manualStoreCount = Object.values(storeMap).flat().length;
 
-  if (totalStores === 0) {
-    if (!USER_ZIP) {
-      log.warn("⚠️  No stores found — USER_ZIP is not set in Railway variables");
-    } else {
-      log.warn(`⚠️  No stores found for zip ${USER_ZIP} — retailer store APIs may be blocking Railway's IP. Check logs above for HTTP errors.`);
-    }
-  }
-  log.info(`📦 Tracking ${products.length} product(s)`);
-  log.info(`📍 Stores within ${SEARCH_RADIUS_MILES}mi of ${USER_ZIP ?? "unset"}:`);
-  breakdownLines.forEach(l => log.info(l));
+  log.info(`📦 Tracking ${products.length} product(s) — checking Target.com, Walmart.com, and Pokemon Center online stock`);
+  if (manualStoreCount > 0) log.info(`🏪 ${manualStoreCount} manual store(s) added via /addstore`);
 
   const cfg = getDiscordConfig();
   await sendToLogs(cfg, [
     `🚀 **Bot online** — polling every ${POLL_INTERVAL}s`,
     `📦 Tracking **${products.length}** product(s)`,
-    `📍 Stores within **${SEARCH_RADIUS_MILES}mi** of \`${USER_ZIP ?? "⚠️ USER_ZIP not set"}\`:`,
-    ...breakdownLines.map(l => l.trim()),
-    totalStores === 0 ? "\n⚠️ **No stores found** — add `USER_ZIP` in Railway Variables and redeploy." : ""
+    `🌐 Monitoring: **Target.com** · **Walmart.com** · **Pokemon Center**`,
+    manualStoreCount > 0 ? `🏪 **${manualStoreCount}** manual store(s) via /addstore` : ""
   ].filter(Boolean).join("\n"));
 
   await checkAll(storeMap, cfg);

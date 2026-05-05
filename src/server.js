@@ -264,44 +264,41 @@ function handleProducts() {
 
 function handleStores() {
   const storeMap = _botStats?.nearbyStores ?? {};
+  const manualStores = Object.entries(storeMap).filter(([, s]) => s.length > 0);
+
+  const onlineLines = [
+    "🌐 **Online stock monitored automatically:**",
+    "  • Target.com",
+    "  • Walmart.com",
+    "  • Pokemon Center (pokemoncenter.com)",
+    ""
+  ];
+
+  if (!manualStores.length) {
+    return {
+      content: [
+        ...onlineLines,
+        "🏪 **In-store monitoring:** none set up yet",
+        "Retailer store locator APIs block cloud servers, so we can't look up stores automatically.",
+        "If you want in-store alerts, ask the server owner to add store IDs manually."
+      ].join("\n"),
+      flags: 64
+    };
+  }
+
   const DISPLAY_NAMES = {
     target: "Target", walmart: "Walmart", costco: "Costco",
     samsclub: "Sam's Club", meijer: "Meijer", walgreens: "Walgreens", cvs: "CVS"
   };
-
-  const hasBeenBuilt = Object.keys(storeMap).length > 0;
-  const retailers = Object.entries(storeMap).filter(([, s]) => s.length > 0);
-
-  if (!hasBeenBuilt) {
-    return {
-      content: "⏳ The bot is still starting up — store lookup runs 5 minutes after boot. Try again shortly, or run `/setlocation <zip>` to trigger it now.",
-      flags: 64
-    };
+  const storeLines = [];
+  for (const [retailerKey, stores] of manualStores) {
+    storeLines.push(`**${DISPLAY_NAMES[retailerKey] ?? retailerKey}** (${stores.length})`);
+    for (const s of stores) storeLines.push(`  • ${s.name}${s.address ? ` — ${s.address}` : ""}`);
   }
+  const total = manualStores.reduce((n, [, s]) => n + s.length, 0);
 
-  if (!retailers.length) {
-    return {
-      content: "⚠️ Store lookup ran but returned 0 results. The retailer APIs may be blocking the server's IP.\n\nCheck Railway logs for lines like `Target: store lookup failed — HTTP 403`. You can also run `/setlocation <zip>` to retry.",
-      flags: 64
-    };
-  }
-
-  const lines = [];
-  for (const [retailerKey, stores] of retailers) {
-    const label = DISPLAY_NAMES[retailerKey] ?? retailerKey;
-    lines.push(`**${label}** (${stores.length})`);
-    for (const s of stores) {
-      lines.push(`  • ${s.name}${s.address ? ` — ${s.address}` : ""}`);
-    }
-  }
-
-  const total = retailers.reduce((n, [, s]) => n + s.length, 0);
-  const content = `**${total} store(s) currently being monitored:**\n\n${lines.join("\n")}`;
-
-  if (content.length > 1950) {
-    return { content: content.slice(0, 1947) + "...", flags: 64 };
-  }
-  return { content, flags: 64 };
+  const content = [...onlineLines, `🏪 **${total} manual store(s):**`, ...storeLines].join("\n");
+  return { content: content.length > 1950 ? content.slice(0, 1947) + "..." : content, flags: 64 };
 }
 
 async function handleDiscover() {
