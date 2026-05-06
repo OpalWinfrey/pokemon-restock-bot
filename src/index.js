@@ -6,7 +6,7 @@ import { dirname, join } from "path";
 import { validateEnv } from "./validate.js";
 import { log } from "./logger.js";
 import { loadDiscordConfig } from "./discord-config.js";
-import { buildManualStoreMap } from "./stores.js";
+import { findAndSaveNearbyStores } from "./stores.js";
 import { discoverProducts } from "./discover.js";
 import { checkTarget }         from "./checkers/target.js";
 import { checkWalmart }        from "./checkers/walmart.js";
@@ -37,9 +37,9 @@ function stateKey(productName, retailer, storeId) {
   return `${productName}__${retailer}__${storeId}`;
 }
 
-// Target in-store API (redsky) returns 403 from datacenter IPs — removed.
-// Target online availability uses HTML scraping via ONLINE_ONLY_CHECKERS instead.
+// Target in-store check uses redsky pdp_client_v1 with store_id — works on residential IPs.
 const CHECKERS = {
+  target:    (cfg, id) => checkTarget({ tcin: cfg.tcin, storeId: id }),
   walmart:   (cfg, id) => checkWalmart({ itemId: cfg.itemId, storeId: id }),
   costco:    (cfg, id) => checkCostco({ itemNumber: cfg.itemNumber, warehouseId: id }),
   samsclub:  (cfg, id) => checkSamsClub({ itemId: cfg.itemId, clubId: id }),
@@ -55,19 +55,18 @@ const DISPLAY = {
   pokemoncenter: "Pokemon Center"
 };
 
-// All major retailers checked for online availability — no store loop.
-// Store locator APIs are blocked from cloud IPs, so we check .com stock directly.
-// If a user manually adds a store via /addstore, per-store checks run via CHECKERS.
+// Online-only checkers — always run regardless of whether nearby stores were found.
+// Walmart and Target also run in-store via CHECKERS when locator returns results.
 const ONLINE_ONLY_CHECKERS = {
   target:        (cfg) => checkTarget({ tcin: cfg.tcin }),
   walmart:       (cfg) => checkWalmart({ itemId: cfg.itemId }),
   pokemoncenter: (cfg) => checkPokemonCenter({ itemId: cfg.itemId, url: cfg.url })
 };
 
-export function buildStoreMap() {
-  // No automated store lookup — cloud IPs are blocked by all retailer locator APIs.
-  // Returns manually-added stores (via /addstore) only.
-  return buildManualStoreMap();
+export async function buildStoreMap() {
+  // Discover nearby stores via store locator APIs (residential IP required).
+  // Merges results into stores.json and returns the combined map (locator + manual).
+  return findAndSaveNearbyStores(USER_ZIP, SEARCH_RADIUS_MILES);
 }
 
 async function checkAll(storeMap, discordConfig) {
@@ -111,7 +110,7 @@ async function checkAll(storeMap, discordConfig) {
         await sleepJitter(1000, 500);
       }
 
-      // In-store check — only runs if stores were manually added via /addstore
+      // In-store check — runs if stores were found by locator or manually added via /addstore
       const manualStores = storeMap[retailerKey] ?? [];
       if (manualStores.length && CHECKERS[retailerKey]) {
         for (const store of manualStores) {
@@ -168,21 +167,25 @@ startBot(botStats, discordConfig, buildStoreMap);
   await new Promise(r => setTimeout(r, 30 * 1000));
   await discoverProducts(getDiscordConfig());
 
-  const storeMap = buildStoreMap();
+  const storeMap = await buildStoreMap();
   botStats.nearbyStores = storeMap;
 
   const products = JSON.parse(readFileSync(PRODUCTS_FILE, "utf8"));
-  const manualStoreCount = Object.values(storeMap).flat().length;
+  const locatorRetailers = ["target", "walmart", "costco", "samsclub"];
+  const locatorStoreCount = locatorRetailers.reduce((n, r) => n + (storeMap[r]?.length ?? 0), 0);
+  const totalStoreCount = Object.values(storeMap).flat().length;
 
-  log.info(`📦 Tracking ${products.length} product(s) — checking Target.com, Walmart.com, and Pokemon Center online stock`);
-  if (manualStoreCount > 0) log.info(`🏪 ${manualStoreCount} manual store(s) added via /addstore`);
+  log.info(`📦 Tracking ${products.length} product(s) — checking Target, Walmart, Costco, Sam's Club in-store + online`);
+  if (locatorStoreCount > 0) log.info(`🏪 ${locatorStoreCount} nearby store(s) found via locator (${totalStoreCount} total)`);
 
   const cfg = getDiscordConfig();
   await sendToLogs(cfg, [
     `🚀 **Bot online** — polling every ${POLL_INTERVAL}s`,
     `📦 Tracking **${products.length}** product(s)`,
-    `🌐 Monitoring: **Target.com** · **Walmart.com** · **Pokemon Center**`,
-    manualStoreCount > 0 ? `🏪 **${manualStoreCount}** manual store(s) via /addstore` : ""
+    `🌐 Monitoring: **Target** · **Walmart** · **Costco** · **Sam's Club** · **Pokemon Center**`,
+    locatorStoreCount > 0
+      ? `🏪 **${locatorStoreCount}** nearby store(s) found within **${SEARCH_RADIUS_MILES}mi** of ${USER_ZIP}`
+      : "⚠️ No nearby stores found — check USER_ZIP and SEARCH_RADIUS_MILES"
   ].filter(Boolean).join("\n"));
 
   await checkAll(storeMap, cfg);
