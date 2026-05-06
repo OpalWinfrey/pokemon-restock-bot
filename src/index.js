@@ -1,5 +1,4 @@
 import "dotenv/config";
-import cron from "node-cron";
 import { readFileSync } from "fs";
 import { fileURLToPath } from "url";
 import { dirname, join } from "path";
@@ -8,7 +7,7 @@ import { log } from "./logger.js";
 import { loadDiscordConfig } from "./discord-config.js";
 import { findAndSaveNearbyStores } from "./stores.js";
 import { discoverProducts } from "./discover.js";
-import { checkTarget, checkTargetBatch } from "./checkers/target.js";
+import { checkTargetBatch } from "./checkers/target.js";
 import { checkWalmart }        from "./checkers/walmart.js";
 import { checkCostco }         from "./checkers/costco.js";
 import { checkSamsClub }       from "./checkers/samsclub.js";
@@ -37,9 +36,7 @@ function stateKey(productName, retailer, storeId) {
   return `${productName}__${retailer}__${storeId}`;
 }
 
-// Target in-store check uses redsky pdp_client_v1 with store_id — works on residential IPs.
 const CHECKERS = {
-  target:    (cfg, id) => checkTarget({ tcin: cfg.tcin, storeId: id }),
   walmart:   (cfg, id) => checkWalmart({ itemId: cfg.itemId, storeId: id }),
   costco:    (cfg, id) => checkCostco({ itemNumber: cfg.itemNumber, warehouseId: id }),
   samsclub:  (cfg, id) => checkSamsClub({ itemId: cfg.itemId, clubId: id }),
@@ -55,10 +52,7 @@ const DISPLAY = {
   pokemoncenter: "Pokemon Center"
 };
 
-// Online-only checkers — always run regardless of whether nearby stores were found.
-// Walmart and Target also run in-store via CHECKERS when locator returns results.
 const ONLINE_ONLY_CHECKERS = {
-  target:        (cfg) => checkTarget({ tcin: cfg.tcin }),
   walmart:       (cfg) => checkWalmart({ itemId: cfg.itemId }),
   pokemoncenter: (cfg) => checkPokemonCenter({ itemId: cfg.itemId, url: cfg.url })
 };
@@ -251,11 +245,12 @@ startBot(botStats, discordConfig, buildStoreMap);
 
   await checkAll(storeMap, cfg);
 
-  cron.schedule(`*/${POLL_INTERVAL} * * * * *`, () =>
+  setInterval(() =>
     checkAll(storeMap, getDiscordConfig()).catch(async err => {
       log.error("checkAll error:", err.message);
       await sendToLogs(getDiscordConfig(), `❌ Check loop error: ${err.message}`);
-    })
+    }),
+    POLL_INTERVAL * 1000
   );
   setInterval(async () => {
     try {

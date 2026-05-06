@@ -64,14 +64,16 @@ export function browserFetch(origin, url, options = {}) {
   });
 }
 
-// Full page navigation — for checkers that need to scrape rendered HTML.
-// Extra args are forwarded to page.evaluate.
+// Full page navigation — warms the origin homepage first for session cookies,
+// then navigates to targetUrl and runs extractFn. Extra args forwarded to evaluate.
 export function browserNavigate(origin, targetUrl, extractFn, ...args) {
   return enqueue(async () => {
     const b = await getBrowser();
     const page = await b.newPage();
     await new Promise(r => setTimeout(r, 100));
     try {
+      await page.goto(origin, { waitUntil: "domcontentloaded", timeout: 25000 });
+      await new Promise(r => setTimeout(r, 800));
       await page.goto(targetUrl, { waitUntil: "domcontentloaded", timeout: 25000 });
       return await page.evaluate(extractFn, ...args);
     } finally {

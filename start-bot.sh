@@ -12,6 +12,13 @@ if [ ! -f ".env" ]; then
   exit 1
 fi
 
+# Kill any existing instance so we never run two at once
+if pgrep -f "node src/index.js" > /dev/null; then
+  echo "Stopping existing bot process..."
+  pkill -9 -f "node src/index.js" 2>/dev/null
+  sleep 1
+fi
+
 echo "Starting bot... (Ctrl+C to stop)"
 echo ""
 
