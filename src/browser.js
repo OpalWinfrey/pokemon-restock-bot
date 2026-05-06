@@ -42,7 +42,8 @@ export function browserFetch(origin, url, options = {}) {
     await new Promise(r => setTimeout(r, 100));
     try {
       await page.goto(origin, { waitUntil: "domcontentloaded", timeout: 30000 });
-      await new Promise(r => setTimeout(r, 800));
+      // Wait for PX/bot-detection scripts to run and set cookies before firing the API call
+      await new Promise(r => setTimeout(r, 3000));
 
       const result = await page.evaluate(async (fetchUrl, fetchOptions) => {
         try {
