@@ -26,6 +26,7 @@ export const discord = {
   getChannels:      guildId        => call("get",    `/guilds/${guildId}/channels`),
   getRoles:         guildId        => call("get",    `/guilds/${guildId}/roles`),
   getMembers:       guildId        => call("get",    `/guilds/${guildId}/members?limit=1000`),
+  getMessages:     (channelId, limit = 5) => call("get", `/channels/${channelId}/messages?limit=${limit}`),
   createChannel:   (guildId, body) => call("post",   `/guilds/${guildId}/channels`, body),
   createRole:      (guildId, body) => call("post",   `/guilds/${guildId}/roles`, body),
   sendMessage:     (channelId, body) => call("post", `/channels/${channelId}/messages`, body),

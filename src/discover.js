@@ -4,6 +4,7 @@ import { fileURLToPath } from "url";
 import { dirname, join } from "path";
 import { log } from "./logger.js";
 import { browserHeaders, apiHeaders, sleepJitter } from "./http.js";
+import { browserFetch } from "./browser.js";
 import { getReferenceMsrp, isLikelyOutOfPrint } from "./classify.js";
 import { sendOutOfPrintBatch } from "./discord.js";
 
@@ -49,19 +50,18 @@ function isPokemonCard(name) {
 // --- Per-retailer search (runs all SEARCH_TERMS and deduplicates) ---
 
 async function searchTarget(term) {
-  const { data } = await axios.get(
-    "https://redsky.target.com/redsky_aggregations/v1/web/plp_search_v2",
-    {
-      params: {
-        keyword: term, count: 24, offset: 0, channel: "WEB",
-        visitor_id: "anonymous", pricing_store_id: "3991",
-        page: "/s/pokemon",
-        key: "9f36aeafbe60771e321a7cc95a78140772ab3e96"
-      },
-      headers: apiHeaders({ Referer: "https://www.target.com/", Origin: "https://www.target.com" }),
-      timeout: 15000
-    }
+  const params = new URLSearchParams({
+    keyword: term, count: 24, offset: 0, channel: "WEB",
+    visitor_id: "anonymous", pricing_store_id: "3991",
+    page: "/s/pokemon",
+    key: "9f36aeafbe60771e321a7cc95a78140772ab3e96"
+  });
+  const data = await browserFetch(
+    "https://www.target.com",
+    `https://redsky.target.com/redsky_aggregations/v1/web/plp_search_v2?${params}`,
+    { headers: { Origin: "https://www.target.com", Referer: "https://www.target.com/" } }
   );
+  if (data?.__error) throw Object.assign(new Error("Target search blocked"), { response: { status: data.__error } });
   return (data?.data?.search?.products ?? []).map(p => {
     const tcin = p.tcin;
     const images = p.item?.enrichment?.images;

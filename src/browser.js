@@ -5,8 +5,15 @@ import { log } from "./logger.js";
 puppeteer.use(StealthPlugin());
 
 let browser = null;
-// Per-domain warm-up state
 const warmed = {};
+
+// Serial queue — only one browser request at a time so PX doesn't see a burst
+let _queue = Promise.resolve();
+function enqueue(fn) {
+  const result = _queue.then(fn);
+  _queue = result.catch(() => {});
+  return result;
+}
 
 export async function getBrowser() {
   if (!browser || !browser.connected) {
@@ -31,27 +38,30 @@ export async function ensureWarmed(page, origin) {
 }
 
 // Fire a fetch() from inside the browser page — bypasses bot detection
-// since the request carries real browser cookies and fingerprint
-export async function browserFetch(origin, url, options = {}) {
-  const b = await getBrowser();
-  const page = await b.newPage();
-  try {
-    await ensureWarmed(page, origin);
-    const result = await page.evaluate(async (fetchUrl, fetchOptions) => {
-      try {
-        const res = await fetch(fetchUrl, {
-          headers: { Accept: "application/json", ...fetchOptions.headers },
-          method: fetchOptions.method ?? "GET",
-          body: fetchOptions.body ?? undefined
-        });
-        if (!res.ok) return { __error: res.status };
-        return await res.json();
-      } catch (e) {
-        return { __error: e.message };
-      }
-    }, url, options);
-    return result;
-  } finally {
-    await page.close();
-  }
+// since the request carries real browser cookies and fingerprint.
+// Serialized through a queue so only one browser request runs at a time.
+export function browserFetch(origin, url, options = {}) {
+  return enqueue(async () => {
+    const b = await getBrowser();
+    const page = await b.newPage();
+    try {
+      await ensureWarmed(page, origin);
+      const result = await page.evaluate(async (fetchUrl, fetchOptions) => {
+        try {
+          const res = await fetch(fetchUrl, {
+            headers: { Accept: "application/json", ...fetchOptions.headers },
+            method: fetchOptions.method ?? "GET",
+            body: fetchOptions.body ?? undefined
+          });
+          if (!res.ok) return { __error: res.status };
+          return await res.json();
+        } catch (e) {
+          return { __error: e.message };
+        }
+      }, url, options);
+      return result;
+    } finally {
+      await page.close();
+    }
+  });
 }

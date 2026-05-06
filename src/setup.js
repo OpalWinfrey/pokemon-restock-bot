@@ -128,14 +128,17 @@ export async function runSetup(guildId) {
     roles[key] = role.id;
   }
 
-  // Post (or re-post) the role picker in #pick-your-alerts
-  await discord.sendMessage(channels.pick, buildPickerMessage(roles));
+  // Only post setup messages if the channel is empty (idempotent re-runs)
+  const [pickMsgs, helpMsgs, oopMsgs] = await Promise.all([
+    discord.getMessages(channels.pick, 1).catch(() => [null]),
+    discord.getMessages(channels.help, 1).catch(() => [null]),
+    discord.getMessages(channels.outOfPrint, 1).catch(() => [null])
+  ]);
 
-  // Post help message in #bot-commands
-  await discord.sendMessage(channels.help, buildHelpMessage());
+  if (!pickMsgs.length) await discord.sendMessage(channels.pick, buildPickerMessage(roles));
+  if (!helpMsgs.length) await discord.sendMessage(channels.help, buildHelpMessage());
 
-  // Post explanation in #out-of-print
-  await discord.sendMessage(channels.outOfPrint, {
+  if (!oopMsgs.length) await discord.sendMessage(channels.outOfPrint, {
     embeds: [{
       title: "📛 Out-of-Print Products",
       color: 0x95a5a6,
