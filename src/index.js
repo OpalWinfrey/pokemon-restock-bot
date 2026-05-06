@@ -8,7 +8,7 @@ import { log } from "./logger.js";
 import { loadDiscordConfig } from "./discord-config.js";
 import { findAndSaveNearbyStores } from "./stores.js";
 import { discoverProducts } from "./discover.js";
-import { checkTarget }         from "./checkers/target.js";
+import { checkTarget, checkTargetBatch } from "./checkers/target.js";
 import { checkWalmart }        from "./checkers/walmart.js";
 import { checkCostco }         from "./checkers/costco.js";
 import { checkSamsClub }       from "./checkers/samsclub.js";
@@ -67,19 +67,90 @@ export async function buildStoreMap(zip) {
   return findAndSaveNearbyStores(zip ?? USER_ZIP, SEARCH_RADIUS_MILES);
 }
 
+// Process batched Target results and fire alerts for any in-stock items.
+async function processTargetResults(batchResults, targetProducts, storeId, storeName, storeAddress, discordConfig) {
+  let restocksFound = 0;
+  for (const { name, cfg, imageUrl, msrp } of targetProducts) {
+    const tcin = String(cfg.tcin);
+    const r = batchResults[tcin];
+    if (!r) continue;
+    const key = stateKey(name, "target", storeId ?? "online");
+    if (r.inStock) {
+      stockCounts[key] = (stockCounts[key] ?? 0) + 1;
+      if (stockCounts[key] === 2) {
+        log.info(`Target ${storeId ? `store ${storeName}` : "online"} RESTOCK confirmed: ${name}`);
+        restocksFound++;
+        await sendRestockAlert({
+          productName: name, retailer: "Target", retailerKey: "target",
+          storeName: storeId ? storeName : "Target.com",
+          storeAddress: storeId ? storeAddress : cfg.url,
+          storeId: storeId ?? "online",
+          url: cfg.url, price: r.price, imageUrl, msrp, discordConfig
+        });
+      } else {
+        log.debug(`Target ${storeId ?? "online"} in stock (${stockCounts[key]}/2): ${name}`);
+      }
+    } else {
+      stockCounts[key] = 0;
+    }
+  }
+  return restocksFound;
+}
+
 async function checkAll(storeMap, discordConfig) {
   log.info(`Checking stock... [${new Date().toLocaleTimeString()}]`);
-  const products = JSON.parse(readFileSync(PRODUCTS_FILE, "utf8"));
+  const products = JSON.parse(readFileSync(PRODUCTS_FILE, "utf8")).filter(p => !p.outOfPrint);
   let restocksFound = 0;
 
+  // --- Target: batch all TCINs into a small number of API calls ---
+  const targetProducts = products
+    .filter(p => p.retailers?.target?.tcin)
+    .map(p => ({ name: p.name, cfg: p.retailers.target, imageUrl: p.imageUrl ?? null, msrp: p.msrp ?? null }));
+
+  if (targetProducts.length) {
+    const BATCH = 20;
+    const tcins = targetProducts.map(p => p.cfg.tcin);
+
+    // Online batch (1 call per 20 products = ~4 calls for 73 products)
+    for (let i = 0; i < tcins.length; i += BATCH) {
+      const batch = tcins.slice(i, i + BATCH);
+      try {
+        const results = await checkTargetBatch(batch, null);
+        log.debug(`Target online batch ${Math.floor(i/BATCH)+1}: ${Object.values(results).filter(r=>r.inStock).length} in stock`);
+        restocksFound += await processTargetResults(results, targetProducts.slice(i, i + BATCH), null, null, null, discordConfig);
+      } catch (err) {
+        log.error(`Target online batch failed:`, err.message);
+      }
+      await sleepJitter(2000, 500);
+    }
+
+    // In-store batch per store (1 call per 20 products per store)
+    for (const store of (storeMap.target ?? [])) {
+      for (let i = 0; i < tcins.length; i += BATCH) {
+        const batch = tcins.slice(i, i + BATCH);
+        try {
+          const results = await checkTargetBatch(batch, store.id);
+          const inStockCount = Object.values(results).filter(r => r.inStock).length;
+          log.debug(`Target store ${store.name} batch ${Math.floor(i/BATCH)+1}: ${inStockCount} in stock`);
+          restocksFound += await processTargetResults(results, targetProducts.slice(i, i + BATCH), store.id, store.name, store.address, discordConfig);
+        } catch (err) {
+          log.error(`Target store ${store.name} batch failed:`, err.message);
+        }
+        await sleepJitter(2000, 500);
+      }
+      await sleepJitter(3000, 1000);
+    }
+  }
+
+  // --- Non-Target retailers (walmart, pokemoncenter, costco, samsclub, meijer) ---
   for (const product of products) {
-    if (product.outOfPrint) { log.debug(`Skipping out-of-print: ${product.name}`); continue; }
     const { name, retailers, imageUrl = null, msrp = null } = product;
 
     for (const [retailerKey, cfg] of Object.entries(retailers)) {
+      if (retailerKey === "target") continue; // handled above
+
       const displayName = DISPLAY[retailerKey] ?? retailerKey;
 
-      // Online check (target, walmart, pokemoncenter — always runs)
       if (ONLINE_ONLY_CHECKERS[retailerKey]) {
         try {
           const { inStock, price } = await ONLINE_ONLY_CHECKERS[retailerKey](cfg);
@@ -87,17 +158,14 @@ async function checkAll(storeMap, discordConfig) {
           if (inStock) {
             stockCounts[key] = (stockCounts[key] ?? 0) + 1;
             if (stockCounts[key] === 2) {
-              log.info(`ONLINE RESTOCK confirmed: ${name} at ${displayName}`);
               restocksFound++;
-              const onlineLabel = { target: "Target.com", walmart: "Walmart.com", pokemoncenter: "Pokemon Center" };
+              const onlineLabel = { walmart: "Walmart.com", pokemoncenter: "Pokemon Center" };
               await sendRestockAlert({
                 productName: name, retailer: displayName, retailerKey,
                 storeName: onlineLabel[retailerKey] ?? `${displayName} Online`,
                 storeAddress: cfg.url, storeId: "online",
                 url: cfg.url, price, imageUrl, msrp, discordConfig
               });
-            } else {
-              log.debug(`Online in stock (${stockCounts[key]}/2): ${name} at ${displayName}`);
             }
           } else {
             stockCounts[key] = 0;
@@ -105,10 +173,9 @@ async function checkAll(storeMap, discordConfig) {
         } catch (err) {
           log.error(`Online check failed: ${name} at ${displayName}:`, err.message);
         }
-        await sleepJitter(1000, 500);
+        await sleepJitter(1500, 500);
       }
 
-      // In-store check — runs if stores were found by locator or manually added via /addstore
       const manualStores = storeMap[retailerKey] ?? [];
       if (manualStores.length && CHECKERS[retailerKey]) {
         for (const store of manualStores) {
@@ -118,15 +185,12 @@ async function checkAll(storeMap, discordConfig) {
             if (inStock) {
               stockCounts[key] = (stockCounts[key] ?? 0) + 1;
               if (stockCounts[key] === 2) {
-                log.info(`IN-STORE RESTOCK confirmed: ${name} at ${displayName} — ${store.name}`);
                 restocksFound++;
                 await sendRestockAlert({
                   productName: name, retailer: displayName, retailerKey,
                   storeName: store.name, storeAddress: store.address, storeId: store.id,
                   url: cfg.url, price, imageUrl, msrp, discordConfig
                 });
-              } else {
-                log.debug(`In-store in stock (${stockCounts[key]}/2): ${name} at ${store.name}`);
               }
             } else {
               stockCounts[key] = 0;
@@ -134,16 +198,15 @@ async function checkAll(storeMap, discordConfig) {
           } catch (err) {
             log.error(`In-store check failed: ${name} at ${store.name}:`, err.message);
           }
-          await sleepJitter(300, 150);
+          await sleepJitter(500, 200);
         }
         await sleepJitter(1000, 500);
-        continue;
       }
-
     }
   }
 
   botStats.lastCheckTime = Date.now();
+  log.info(`Check complete — ${restocksFound} restock(s) found`);
   if (restocksFound > 0) {
     await sendToLogs(discordConfig, `✅ Check complete — ${restocksFound} restock(s) found`);
   }
