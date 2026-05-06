@@ -57,18 +57,7 @@ export async function sendRestockAlert({
     categories.map(cat => discordConfig.roles[cat]).filter(Boolean)
   );
 
-  let mentionStr = "";
-  try {
-    const allMembers = await discord.getMembers(discordConfig.guildId);
-    const toNotify = allMembers.filter(m =>
-      !m.user?.bot &&
-      m.roles.some(r => relevantRoleIds.has(r)) &&
-      userWantsRetailer(m.user.id, retailerKey)
-    );
-    mentionStr = toNotify.map(m => `<@${m.user.id}>`).join(" ");
-  } catch (err) {
-    log.warn("Could not fetch members for mentions:", err.message);
-  }
+  const mentionStr = [...relevantRoleIds].map(id => `<@&${id}>`).join(" ");
 
   const isOnlineDrop = storeId === "online";
   const storeDisplay = isOnlineDrop

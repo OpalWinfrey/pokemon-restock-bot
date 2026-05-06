@@ -1,5 +1,5 @@
 /**
- * HTTP server — handles Discord slash commands and button clicks.
+ * Discord Gateway bot — handles slash commands and button clicks via WebSocket.
  *
  * Slash commands:
  *   /setup         — one-time server setup (creates channels, roles, button picker)
@@ -11,8 +11,7 @@
  *   Role toggle buttons — adds or removes an alert role for the user who clicked
  */
 
-import http from "http";
-import { createPublicKey, verify } from "crypto";
+import { Client, GatewayIntentBits, REST, Routes } from "discord.js";
 import axios from "axios";
 import { readFileSync, writeFileSync } from "fs";
 import { fileURLToPath } from "url";
@@ -36,24 +35,6 @@ let _rebuildStoreMap = null;
 const __dir = dirname(fileURLToPath(import.meta.url));
 const PRODUCTS_FILE = join(__dir, "../config/products.json");
 
-// --- Discord Ed25519 signature verification (Node 18+ built-in crypto) ---
-function verifySignature(publicKeyHex, signature, timestamp, rawBody) {
-  try {
-    const pubKey = createPublicKey({
-      key: Buffer.concat([
-        Buffer.from("302a300506032b6570032100", "hex"),
-        Buffer.from(publicKeyHex, "hex")
-      ]),
-      format: "der",
-      type: "spki"
-    });
-    return verify(null, Buffer.from(timestamp + rawBody), pubKey, Buffer.from(signature, "hex"));
-  } catch (err) {
-    log.error("Signature verification error:", err.message);
-    return false;
-  }
-}
-
 // --- Slash command handlers ---
 
 async function handleSetup(guildId) {
@@ -72,7 +53,7 @@ async function handleSetup(guildId) {
   }
 }
 
-function handleSetLocation(userId, username, options, interactionToken) {
+function handleSetLocation(userId, username, options, interaction) {
   const zip = options.find(o => o.name === "zip")?.value;
   const radius = 25;
 
@@ -96,20 +77,14 @@ function handleSetLocation(userId, username, options, interactionToken) {
         .map(([r, s]) => `• **${DISPLAY_NAMES[r] ?? r}**: ${s.length} store(s)`);
       const total = Object.values(storeMap).flat().length;
 
-      const followUp = total > 0
+      const followUpContent = total > 0
         ? `📍 Found **${total} store(s)** within ${radius} miles of \`${zip}\`:\n${found.join("\n")}`
         : `⚠️ No stores found within ${radius} miles of \`${zip}\`. The bot may still detect online-only drops.\n\nIf you're in a rural area, try a nearby larger city's zip.`;
 
       log.info(`Store map rebuilt for ${username} (${zip}): ${total} store(s)`);
 
-      // Send follow-up via interaction webhook (valid for 15 min, no bot token needed)
-      const appId = process.env.DISCORD_APP_ID;
-      if (appId && interactionToken) {
-        await axios.post(
-          `https://discord.com/api/v10/webhooks/${appId}/${interactionToken}`,
-          { content: followUp, flags: 64 }
-        ).catch(err => log.warn("setlocation follow-up failed:", err.message));
-      }
+      await interaction.followUp({ content: followUpContent, ephemeral: true })
+        .catch(err => log.warn("setlocation follow-up failed:", err.message));
     }).catch(err => log.warn("Store map rebuild failed:", err.message));
   }
 
@@ -378,8 +353,6 @@ async function handleButtonClick(guildId, userId, username, customId) {
   if (customId === "role_removeAll") {
     try {
       const member = await discord.getMember(guildId, userId);
-      const { discord: discordCfg } = await import("./discord-config.js");
-      // We'll load roles fresh to get IDs — simple approach
       const roles = await discord.getRoles(guildId);
       const alertRoleNames = Object.values(ROLE_NAMES);
       const alertRoles = roles.filter(r => alertRoleNames.includes(r.name));
@@ -547,10 +520,10 @@ export async function registerSlashCommands() {
   }
 
   try {
-    await axios.put(
-      `https://discord.com/api/v10/applications/${appId}/guilds/${guildId}/commands`,
-      commands,
-      { headers: { Authorization: `Bot ${token}`, "Content-Type": "application/json" } }
+    const rest = new REST({ version: "10" }).setToken(token);
+    await rest.put(
+      Routes.applicationGuildCommands(appId, guildId),
+      { body: commands }
     );
     log.info("Slash commands registered: /setup /setlocation /status /products /stores /discover /test");
   } catch (err) {
@@ -558,79 +531,100 @@ export async function registerSlashCommands() {
   }
 }
 
-// --- HTTP server ---
+// --- Discord Gateway bot ---
 
-export function startServer(botStats, initialConfig, rebuildStoreMap) {
+export function startBot(botStats, initialConfig, rebuildStoreMap) {
   _discordConfig = initialConfig;
   _botStats = botStats;
   if (rebuildStoreMap) _rebuildStoreMap = rebuildStoreMap;
-  const publicKey = process.env.DISCORD_PUBLIC_KEY;
-  const port = process.env.PORT ?? 3000;
 
-  if (!publicKey) {
-    log.warn("DISCORD_PUBLIC_KEY not set — slash command server not started");
+  const token = process.env.DISCORD_BOT_TOKEN;
+  if (!token) {
+    log.warn("DISCORD_BOT_TOKEN not set — bot not started");
     return;
   }
 
-  http.createServer((req, res) => {
-    if (req.method !== "POST" || req.url !== "/interactions") {
-      res.writeHead(404); res.end(); return;
-    }
+  const client = new Client({
+    intents: [
+      GatewayIntentBits.Guilds
+    ]
+  });
 
-    let rawBody = "";
-    req.on("data", chunk => { rawBody += chunk; });
-    req.on("end", async () => {
-      const sig = req.headers["x-signature-ed25519"];
-      const ts  = req.headers["x-signature-timestamp"];
+  client.once("ready", () => {
+    log.info(`Discord Gateway connected — logged in as ${client.user.tag}`);
+  });
 
-      if (!verifySignature(publicKey, sig, ts, rawBody)) {
-        res.writeHead(401); res.end("Invalid signature"); return;
-      }
-
-      const body = JSON.parse(rawBody);
-      res.setHeader("Content-Type", "application/json");
-
-      // Discord PING
-      if (body.type === 1) {
-        res.writeHead(200); res.end(JSON.stringify({ type: 1 })); return;
-      }
-
-      const guildId  = body.guild_id;
-      const userId   = body.member?.user?.id ?? body.user?.id;
-      const username = body.member?.user?.username ?? body.user?.username;
-      let responseData;
+  client.on("interactionCreate", async interaction => {
+    try {
+      const guildId  = interaction.guildId;
+      const userId   = interaction.user?.id;
+      const username = interaction.user?.username;
 
       // Slash command
-      if (body.type === 2) {
-        const { name, options = [] } = body.data;
+      if (interaction.isChatInputCommand()) {
+        const name = interaction.commandName;
+        const rawOptions = interaction.options.data.map(opt => ({ name: opt.name, value: opt.value }));
+
+        let responseData;
+
+        // /setlocation sends an immediate ack then a follow-up after async store lookup
+        if (name === "setlocation") {
+          await interaction.deferReply({ ephemeral: true });
+          responseData = handleSetLocation(userId, username, rawOptions, interaction);
+          await interaction.editReply(responseData);
+          return;
+        }
+
         switch (name) {
           case "setup":       responseData = await handleSetup(guildId); break;
-          case "setlocation": responseData = handleSetLocation(userId, username, options, body.token); break;
           case "status":      responseData = handleStatus(botStats); break;
           case "test":        responseData = await handleTest(_discordConfig); break;
           case "products":    responseData = handleProducts(); break;
-          case "stores":       responseData = handleStores(); break;
-          case "addstore":     responseData = handleAddStore(options); break;
-          case "removestore":  responseData = handleRemoveStore(options); break;
-          case "addproduct":  responseData = handleAddProduct(options); break;
+          case "stores":      responseData = handleStores(); break;
+          case "addstore":    responseData = handleAddStore(rawOptions); break;
+          case "removestore": responseData = handleRemoveStore(rawOptions); break;
+          case "addproduct":  responseData = handleAddProduct(rawOptions); break;
           case "discover":    responseData = await handleDiscover(); break;
           default:            responseData = { content: "Unknown command.", flags: 64 };
         }
-        res.writeHead(200);
-        res.end(JSON.stringify({ type: 4, data: responseData }));
+
+        // flags: 64 = ephemeral in the HTTP model; use ephemeral: true for discord.js
+        const ephemeral = Boolean(responseData.flags & 64);
+        const reply = { ...responseData };
+        delete reply.flags;
+        await interaction.reply({ ...reply, ephemeral });
         return;
       }
 
       // Button click
-      if (body.type === 3) {
-        const customId = body.data.custom_id;
-        responseData = await handleButtonClick(guildId, userId, username, customId);
-        res.writeHead(200);
-        res.end(JSON.stringify({ type: 4, data: responseData }));
+      if (interaction.isButton()) {
+        const customId = interaction.customId;
+        const responseData = await handleButtonClick(guildId, userId, username, customId);
+        const ephemeral = Boolean(responseData.flags & 64);
+        const reply = { ...responseData };
+        delete reply.flags;
+        await interaction.reply({ ...reply, ephemeral });
         return;
       }
+    } catch (err) {
+      log.error("interactionCreate error:", err.message);
+      try {
+        const msg = { content: "❌ Something went wrong processing that interaction.", ephemeral: true };
+        if (interaction.deferred) await interaction.editReply(msg);
+        else if (!interaction.replied) await interaction.reply(msg);
+      } catch { /* ignore reply errors */ }
+    }
+  });
 
-      res.writeHead(400); res.end();
-    });
-  }).listen(port, () => log.info(`Slash command server listening on port ${port}`));
+  client.on("error", err => log.error("Discord client error:", err.message));
+
+  client.login(token).catch(err => {
+    log.error("Failed to login to Discord Gateway:", err.message);
+    process.exit(1);
+  });
+
+  return client;
 }
+
+// Backwards-compatible alias so existing index.js import keeps working
+export { startBot as startServer };

@@ -17,7 +17,7 @@ import { checkWalgreens }      from "./checkers/walgreens.js";
 import { checkCVS }            from "./checkers/cvs.js";
 import { checkPokemonCenter }  from "./checkers/pokemoncenter.js";
 import { sendRestockAlert, sendToLogs } from "./discord.js";
-import { startServer, registerSlashCommands, getDiscordConfig } from "./server.js";
+import { startBot, registerSlashCommands, getDiscordConfig } from "./server.js";
 import { sleepJitter } from "./http.js";
 
 validateEnv();
@@ -157,15 +157,13 @@ async function checkAll(storeMap, discordConfig) {
 log.info("🚀 Pokemon Restock Bot starting...");
 log.info(`📍 ZIP: ${USER_ZIP} | Radius: ${SEARCH_RADIUS_MILES}mi | Poll: ${POLL_INTERVAL}s | Rediscover: every ${DISCOVER_INTERVAL_HRS}h`);
 
-// Start the HTTP server immediately so Discord's endpoint verification succeeds
-// while the slower discovery + store lookup runs in the background.
+// Register slash commands and connect to Discord Gateway
 await registerSlashCommands();
 const discordConfig = await loadDiscordConfig();
-startServer(botStats, discordConfig, buildStoreMap);
+startBot(botStats, discordConfig, buildStoreMap);
 
-// Background init — runs after server is already accepting requests
+// Background init — runs after Gateway connection is established
 (async () => {
-  // Short delay so the server is accepting requests before discovery fires
   log.info("⏳ Starting product discovery in 30s...");
   await new Promise(r => setTimeout(r, 30 * 1000));
   await discoverProducts(getDiscordConfig());
