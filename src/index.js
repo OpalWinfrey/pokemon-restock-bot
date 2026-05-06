@@ -63,10 +63,8 @@ const ONLINE_ONLY_CHECKERS = {
   pokemoncenter: (cfg) => checkPokemonCenter({ itemId: cfg.itemId, url: cfg.url })
 };
 
-export async function buildStoreMap() {
-  // Discover nearby stores via store locator APIs (residential IP required).
-  // Merges results into stores.json and returns the combined map (locator + manual).
-  return findAndSaveNearbyStores(USER_ZIP, SEARCH_RADIUS_MILES);
+export async function buildStoreMap(zip) {
+  return findAndSaveNearbyStores(zip ?? USER_ZIP, SEARCH_RADIUS_MILES);
 }
 
 async function checkAll(storeMap, discordConfig) {

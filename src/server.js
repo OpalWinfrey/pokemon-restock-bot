@@ -63,9 +63,9 @@ function handleSetLocation(userId, username, options, interaction) {
 
   setUserLocation(userId, username, zip, radius);
 
-  // Rebuild store map and follow up with exact counts once done
+  // Rebuild store map using the user's zip and follow up with exact counts once done
   if (_rebuildStoreMap) {
-    _rebuildStoreMap().then(async storeMap => {
+    _rebuildStoreMap(zip).then(async storeMap => {
       if (_botStats) _botStats.nearbyStores = storeMap;
 
       const DISPLAY_NAMES = {
