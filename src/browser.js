@@ -5,10 +5,8 @@ import { log } from "./logger.js";
 puppeteer.use(StealthPlugin());
 
 let browser = null;
-// One persistent page per origin — warm once, reuse for all subsequent fetches
-const pages = {};
 
-// Serial queue — one browser operation at a time
+// Serial queue — one browser operation at a time, no burst patterns
 let _queue = Promise.resolve();
 function enqueue(fn) {
   const result = _queue.then(fn);
@@ -23,7 +21,6 @@ async function launchBrowser() {
   });
   browser.on("disconnected", () => {
     browser = null;
-    Object.keys(pages).forEach(k => delete pages[k]);
     log.warn("Browser disconnected — will relaunch on next request");
   });
   return browser;
@@ -34,71 +31,57 @@ export async function getBrowser() {
   return browser;
 }
 
-// Returns the persistent warmed page for this origin, navigating once if needed.
-// Uses domcontentloaded (not networkidle2) so we don't time out on heavy pages.
-async function getWarmPage(origin) {
-  const b = await getBrowser();
-
-  if (pages[origin]) {
-    try {
-      // Verify page is still usable
-      await pages[origin].evaluate(() => document.readyState);
-      return pages[origin];
-    } catch {
-      delete pages[origin];
-    }
-  }
-
-  const page = await b.newPage();
-  await page.setExtraHTTPHeaders({ "Accept-Language": "en-US,en;q=0.9" });
-  log.debug(`Browser: warming session for ${origin}…`);
-  await page.goto(origin, { waitUntil: "domcontentloaded", timeout: 30000 });
-  await new Promise(r => setTimeout(r, 1500));
-  pages[origin] = page;
-  log.debug(`Browser: session ready for ${origin}`);
-  return page;
-}
-
-// Fire a fetch() from inside the warmed browser page for this origin.
-// All calls are serialized so PX never sees burst requests.
+// Fire fetch() from inside the browser after visiting the origin homepage once.
+// Uses domcontentloaded (not networkidle2) to avoid 30s timeouts on heavy pages.
+// All calls go through the serial queue so PX never sees burst requests.
 export function browserFetch(origin, url, options = {}) {
   return enqueue(async () => {
-    const page = await getWarmPage(origin);
-    const result = await page.evaluate(async (fetchUrl, fetchOptions) => {
-      try {
-        const res = await fetch(fetchUrl, {
-          headers: { Accept: "application/json", ...fetchOptions.headers },
-          method: fetchOptions.method ?? "GET",
-          body: fetchOptions.body ?? undefined
-        });
-        if (!res.ok) return { __error: res.status };
-        return await res.json();
-      } catch (e) {
-        return { __error: e.message };
-      }
-    }, url, options);
-    return result;
+    const b = await getBrowser();
+    const page = await b.newPage();
+    // Brief pause so the stealth plugin finishes its onPageCreated setup
+    await new Promise(r => setTimeout(r, 100));
+    try {
+      await page.goto(origin, { waitUntil: "domcontentloaded", timeout: 30000 });
+      await new Promise(r => setTimeout(r, 800));
+
+      const result = await page.evaluate(async (fetchUrl, fetchOptions) => {
+        try {
+          const res = await fetch(fetchUrl, {
+            headers: { Accept: "application/json", ...fetchOptions.headers },
+            method: fetchOptions.method ?? "GET",
+            body: fetchOptions.body ?? undefined
+          });
+          if (!res.ok) return { __error: res.status };
+          return await res.json();
+        } catch (e) {
+          return { __error: e.message };
+        }
+      }, url, options);
+      return result;
+    } finally {
+      await page.close().catch(() => {});
+    }
   });
 }
 
-// Used by checkers that need full page navigation (e.g. Walmart).
-// Still goes through the queue and gets a fresh page.
-// Extra args are forwarded to page.evaluate() so you can pass Node values in.
+// Full page navigation — for checkers that need to scrape rendered HTML.
+// Extra args are forwarded to page.evaluate.
 export function browserNavigate(origin, targetUrl, extractFn, ...args) {
   return enqueue(async () => {
     const b = await getBrowser();
     const page = await b.newPage();
+    await new Promise(r => setTimeout(r, 100));
     try {
       await page.goto(targetUrl, { waitUntil: "domcontentloaded", timeout: 25000 });
       return await page.evaluate(extractFn, ...args);
     } finally {
-      await page.close();
+      await page.close().catch(() => {});
     }
   });
 }
 
-// Also export ensureWarmed for checkers that open their own page
+// Legacy export used by checkers that manage their own page
 export async function ensureWarmed(page, origin) {
   await page.goto(origin, { waitUntil: "domcontentloaded", timeout: 30000 });
-  await new Promise(r => setTimeout(r, 1000));
+  await new Promise(r => setTimeout(r, 800));
 }

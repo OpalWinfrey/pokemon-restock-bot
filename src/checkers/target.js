@@ -5,6 +5,10 @@ const ORIGIN = "https://www.target.com";
 const API_KEY = "9f36aeafbe60771e321a7cc95a78140772ab3e96";
 const BATCH_SIZE = 20;
 
+function randomVisitorId() {
+  return Array.from({ length: 32 }, () => Math.floor(Math.random() * 16).toString(16).toUpperCase()).join("");
+}
+
 // Fetch fulfillment data for up to BATCH_SIZE TCINs in one API call.
 // Returns a map of tcin → { inStock, price, storeStatus }
 export async function checkTargetBatch(tcins, storeId = null) {
@@ -13,7 +17,7 @@ export async function checkTargetBatch(tcins, storeId = null) {
     key: API_KEY,
     tcins: tcins.join(","),
     zip, state: "OH", channel: "WEB",
-    visitor_id: "019DFAA0C27F0200803CEDE2427494BD",
+    visitor_id: randomVisitorId(),
     page: "/s/pokemon"
   });
   if (storeId) {
