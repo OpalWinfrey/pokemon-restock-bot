@@ -1,16 +1,13 @@
-import { getBrowser, ensureWarmed } from "../browser.js";
+import { browserNavigate } from "../browser.js";
 import { log } from "../logger.js";
 
-const ORIGIN = "https://www.walmart.com";
-
 export async function checkWalmart({ itemId, storeId = null }) {
-  const b = await getBrowser();
-  const page = await b.newPage();
   try {
-    await ensureWarmed(page, ORIGIN);
-    await page.goto(`https://www.walmart.com/ip/${itemId}`, { waitUntil: "networkidle2", timeout: 20000 });
+    const result = await browserNavigate(
+      "https://www.walmart.com",
+      `https://www.walmart.com/ip/${itemId}`,
+      (sid) => {  // sid is serialized into browser context by page.evaluate
 
-    const result = await page.evaluate((sid) => {
       const el = document.getElementById("__NEXT_DATA__");
       if (!el) return null;
       const data = JSON.parse(el.textContent);
@@ -18,19 +15,14 @@ export async function checkWalmart({ itemId, storeId = null }) {
       if (!product) return null;
       const status = product.availabilityStatus ?? product.fulfillmentLabel ?? "";
       const price = product.priceInfo?.currentPrice?.price ?? null;
-
-      // In-store: check if store-specific pickup is available
       const pickupOptions = product.fulfillmentSummary ?? [];
       const storeAvail = sid
         ? pickupOptions.find(o => o.fulfillmentType === "PICKUP" || o.fulfillmentType === "IN_STORE")?.availabilityStatus ?? ""
         : null;
-
-      return {
-        status,
-        price,
-        storeStatus: storeAvail
-      };
-    }, storeId);
+      return { status, price, storeStatus: storeAvail };
+    },
+    storeId  // passed as `sid` argument inside browser context
+    );
 
     if (!result) {
       log.warn(`Walmart: no product data for item ${itemId}`);
@@ -46,7 +38,5 @@ export async function checkWalmart({ itemId, storeId = null }) {
   } catch (err) {
     log.error(`Walmart check failed for item ${itemId}:`, err.message);
     return { inStock: false, price: null };
-  } finally {
-    await page.close();
   }
 }
