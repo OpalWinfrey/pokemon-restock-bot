@@ -862,5 +862,17 @@
         "url": "https://www.target.com/p/-/A-92339821"
       }
     }
+  },
+  {
+    "name": "Pokemon TCG: Pokemon GO Tin | Blissey",
+    "imageUrl": null,
+    "msrp": 24.99,
+    "outOfPrint": true,
+    "retailers": {
+      "target": {
+        "tcin": "1005630467",
+        "url": "https://www.target.com/p/-/A-1005630467"
+      }
+    }
   }
 ]
